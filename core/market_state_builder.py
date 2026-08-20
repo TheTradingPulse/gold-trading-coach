@@ -1,5 +1,5 @@
 """
-The Trading Pulse - Market State Builder V2.6
+The Trading Pulse - Market State Builder V2.7
 
 Authoritative deterministic market-state builder.
 
@@ -62,6 +62,7 @@ from market_state import (
     create_empty_market_state,
 )
 from confirmation_engine import evaluate_setup_lifecycle
+from trade_plan_engine import build_structural_trade_plan
 from trend_engine import assess_trend
 from zone_engine import detect_supply_zones, detect_demand_zones
 
@@ -763,21 +764,54 @@ def build_market_state(
         setup_state,
         setup_direction,
         confirmation,
-        trade,
     ) = evaluate_setup_lifecycle(
         state.current_price,
         execution_zone,
         bias,
         opposing_conflict,
-        instrument,
         load_market_data,
     )
+
+    # V2.7: confirmation and trade planning are separate deterministic engines.
+    trade = build_structural_trade_plan(
+        instrument=instrument,
+        current_price=state.current_price,
+        direction=setup_direction,
+        execution_zone=execution_zone,
+        confirmation=confirmation,
+        opposing_conflict=opposing_conflict,
+        supply_zones=supply_zones,
+        demand_zones=demand_zones,
+    )
+
+    confirmation.conditions_met = sum([
+        confirmation.price_in_zone,
+        confirmation.lower_timeframe_confirmed,
+        confirmation.structural_trigger,
+        confirmation.risk_validated,
+    ])
+
+    missing = []
+    if opposing_conflict is not None:
+        missing.append("Opposing-zone conflict must resolve")
+    if not confirmation.price_in_zone:
+        missing.append("Price must be in a clean execution zone")
+    if not confirmation.lower_timeframe_confirmed:
+        missing.append("Lower-timeframe confirmation required")
+    if not confirmation.structural_trigger:
+        missing.append("Structural trigger required")
+    if not confirmation.risk_validated:
+        missing.append("Risk validation required")
+    confirmation.missing_conditions = missing
+
+    if trade is not None and confirmation.conditions_met == confirmation.conditions_total:
+        setup_state = "TRADE_READY"
+    elif confirmation.structural_trigger:
+        setup_state = "RISK_VALIDATING"
 
     state.setup_state = setup_state
     state.setup_direction = setup_direction
     state.confirmation = confirmation
-
-    # Deterministic trade plan exists only when every required condition passes.
     state.trade = trade
 
     # --------------------------------------------------------------
@@ -785,7 +819,7 @@ def build_market_state(
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.6",
+        "architecture_version": "2.7",
         "price_source_timeframe": price_timeframe,
         "storage_status": "GC-only legacy storage",
         "trade_values_generated_by_ai": False,
@@ -827,12 +861,12 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.6",
+        "market_state": "2.7",
         "trend": "legacy_v1",
         "zones": "legacy_v1",
         "zone_selector": "v2.5_hierarchical",
-        "confirmation": "v2.6_evidence_engine",
-        "risk": "v2.6_zone_invalidation",
+        "confirmation": "v2.7_evidence_engine",
+        "trade_plan": "v2.7_structural_targets",
     }
 
     missing_timeframes = [
@@ -872,7 +906,7 @@ def print_market_state(
     print("=" * 68)
     print(
         " THE TRADING PULSE - "
-        "LIVE MARKET STATE V2.6"
+        "LIVE MARKET STATE V2.7"
     )
     print("=" * 68)
 

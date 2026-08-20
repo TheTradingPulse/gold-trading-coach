@@ -1,8 +1,16 @@
 """
-The Trading Pulse - Confirmation Engine V2.6
+The Trading Pulse - Confirmation Engine V2.7
 
-Deterministic execution confirmation and risk qualification.
-No AI-generated trading values are permitted here.
+Deterministic execution confirmation only.
+
+Responsibilities:
+- detect execution-zone interaction
+- detect lower-timeframe directional confirmation
+- detect structural trigger
+- expose evidence for Dashboard / Professor
+
+Risk, stops, targets, R:R, and trade acceptance are intentionally delegated
+to core/trade_plan_engine.py.
 """
 from __future__ import annotations
 
@@ -10,15 +18,13 @@ from typing import Callable, Optional
 import pandas as pd
 
 try:
-    from core.market_state import ConfirmationState, TargetState, TradeState, ZoneState
+    from core.market_state import ConfirmationState, ZoneState
 except ImportError:
-    from market_state import ConfirmationState, TargetState, TradeState, ZoneState
+    from market_state import ConfirmationState, ZoneState
 
-ENGINE_VERSION = "2.6"
+ENGINE_VERSION = "2.7"
 CONFIRMATION_TIMEFRAMES = ["5m", "1m"]
 TOUCH_LOOKBACK_BARS = 6
-STOP_BUFFER_TICKS = 2
-MIN_RR_FOR_READY = 2.0
 
 
 def _iso(value) -> Optional[str]:
@@ -101,9 +107,9 @@ def evaluate_price_action_confirmation(direction, execution_zone, data_loader: C
         c.lower_timeframe_confirmed = directional
         c.evidence.append(_ev(
             "directional_candle", directional, timeframe, last_time, float(last["close"]),
-            f"Latest {timeframe} candle " +
-            ("closes" if directional else "does not close") +
-            f" in the {direction} direction."
+            f"Latest {timeframe} candle "
+            + ("closes" if directional else "does not close")
+            + f" in the {direction} direction."
         ))
 
         if direction == "LONG":
@@ -135,6 +141,7 @@ def evaluate_price_action_confirmation(direction, execution_zone, data_loader: C
             if directional else
             f"{timeframe} zone interaction detected, but directional confirmation is missing."
         )
+
         if c.structural_trigger:
             c.trigger_time = _iso(last_time)
             c.structural_reason = (
@@ -151,85 +158,25 @@ def evaluate_price_action_confirmation(direction, execution_zone, data_loader: C
     return c
 
 
-def build_trade_plan(instrument, current_price, direction, execution_zone, confirmation, opposing_conflict):
-    if (
-        direction is None
-        or execution_zone is None
-        or opposing_conflict is not None
-        or not confirmation.price_in_zone
-        or not confirmation.lower_timeframe_confirmed
-        or not confirmation.structural_trigger
-    ):
-        confirmation.risk_validated = False
-        confirmation.risk_reason = "Risk plan waits for a clean, confirmed execution setup."
-        return None
+def evaluate_setup_lifecycle(current_price, execution_zone, bias, opposing_conflict, data_loader):
+    """
+    Confirmation-only lifecycle.
 
-    tick = float(instrument.tick_size)
-    buffer_points = tick * STOP_BUFFER_TICKS
-    entry = float(current_price)
-
-    if direction == "LONG":
-        stop = float(execution_zone.lower_bound) - buffer_points
-        risk_points = entry - stop
-    else:
-        stop = float(execution_zone.upper_bound) + buffer_points
-        risk_points = stop - entry
-
-    if risk_points <= 0:
-        confirmation.risk_validated = False
-        confirmation.risk_reason = "Calculated stop does not create positive risk distance."
-        confirmation.evidence.append(_ev(
-            "risk_validation", False, None, None, entry, confirmation.risk_reason
-        ))
-        return None
-
-    risk_ticks = risk_points / tick
-    risk_dollars = instrument.dollars_for_points(risk_points)
-    targets = []
-
-    for multiple, name in [(1.0, "T1"), (2.0, "T2"), (3.0, "T3")]:
-        price = entry + risk_points * multiple if direction == "LONG" else entry - risk_points * multiple
-        targets.append(TargetState(
-            name=name,
-            price=round(price, 4),
-            reward_points=round(risk_points * multiple, 4),
-            reward_ticks=round(risk_ticks * multiple, 2),
-            reward_dollars_per_contract=round(risk_dollars * multiple, 2),
-            rr_ratio=multiple,
-        ))
-
-    confirmation.risk_validated = True
-    confirmation.risk_reason = (
-        f"Stop is {STOP_BUFFER_TICKS} ticks beyond execution-zone invalidation; "
-        f"T2 provides {MIN_RR_FOR_READY:.1f}R."
-    )
-    confirmation.evidence.append(_ev(
-        "risk_validation", True, None, None, entry, confirmation.risk_reason
-    ))
-
-    return TradeState(
-        direction=direction,
-        entry=round(entry, 4),
-        stop=round(stop, 4),
-        targets=targets,
-        risk_points=round(risk_points, 4),
-        risk_ticks=round(risk_ticks, 2),
-        risk_dollars_per_contract=round(risk_dollars, 2),
-        setup_grade=execution_zone.grade,
-        historical_probability=None,
-        probability_sample_size=None,
-    )
-
-
-def evaluate_setup_lifecycle(current_price, execution_zone, bias, opposing_conflict, instrument, data_loader):
+    The fourth canonical condition (risk_validated) remains False here and is
+    populated later by trade_plan_engine.py.
+    """
     c = ConfirmationState(conditions_total=4)
 
     if execution_zone is None:
         c.missing_conditions = ["Qualifying execution zone required"]
-        return "SCANNING", None, c, None
+        return "SCANNING", None, c
 
     direction = "LONG" if bias == "bullish" else "SHORT" if bias == "bearish" else None
     c.price_in_zone = execution_zone.contains(current_price)
+
+    if direction is None:
+        c.missing_conditions = ["Directional market bias required"]
+        return "WATCHING", None, c
 
     if opposing_conflict is not None:
         c.missing_conditions = [
@@ -244,7 +191,7 @@ def evaluate_setup_lifecycle(current_price, execution_zone, bias, opposing_confl
             current_price,
             f"Price overlaps opposing {opposing_conflict.timeframe} {opposing_conflict.type} zone."
         ))
-        return "WATCHING", direction, c, None
+        return "WATCHING", direction, c
 
     if not c.price_in_zone:
         c.missing_conditions = [
@@ -254,14 +201,12 @@ def evaluate_setup_lifecycle(current_price, execution_zone, bias, opposing_confl
             "Risk validation required",
         ]
         state = "APPROACHING" if float(execution_zone.distance_percent or 0) <= 0.35 else "WATCHING"
-        return state, direction, c, None
+        return state, direction, c
 
     c = evaluate_price_action_confirmation(direction, execution_zone, data_loader)
     c.price_in_zone = True
-
-    trade = build_trade_plan(
-        instrument, current_price, direction, execution_zone, c, opposing_conflict
-    )
+    c.risk_validated = False
+    c.risk_reason = "Trade-plan risk validation has not passed yet."
 
     c.conditions_met = sum([
         c.price_in_zone,
@@ -279,10 +224,8 @@ def evaluate_setup_lifecycle(current_price, execution_zone, bias, opposing_confl
         missing.append("Risk validation required")
     c.missing_conditions = missing
 
-    if trade is not None and c.conditions_met == c.conditions_total:
-        return "TRADE_READY", direction, c, trade
     if c.structural_trigger:
-        return "TRIGGER_CONFIRMED", direction, c, None
+        return "TRIGGER_CONFIRMED", direction, c
     if c.lower_timeframe_confirmed:
-        return "CONFIRMING", direction, c, None
-    return "IN_ZONE", direction, c, None
+        return "CONFIRMING", direction, c
+    return "IN_ZONE", direction, c

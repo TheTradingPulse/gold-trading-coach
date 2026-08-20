@@ -1,5 +1,5 @@
 """
-The Trading Pulse - Universal Market State
+The Trading Pulse - Universal Market State V2.7
 
 MarketState is the common contract between:
 
@@ -128,6 +128,12 @@ class TradeState:
     probability_sample_size: Optional[int] = None
 
     invalidation_reason: Optional[str] = None
+
+    # V2.7 structural trade-plan provenance.
+    target_model: Optional[str] = None
+    nearest_opposing_zone: Optional[dict[str, Any]] = None
+    room_to_target_points: Optional[float] = None
+    minimum_required_rr: Optional[float] = None
 
 
 @dataclass
