@@ -36,6 +36,9 @@ VALID_SETUP_STATES = {
     "APPROACHING",
     "IN_ZONE",
     "CONFIRMING",
+    "STRUCTURE_SHIFT",
+    "TRIGGER_CONFIRMED",
+    "RISK_VALIDATING",
     "TRADE_READY",
     "ACTIVE",
     "COMPLETED",
@@ -81,6 +84,13 @@ class ConfirmationState:
     confirmation_reason: Optional[str] = None
     structural_reason: Optional[str] = None
     risk_reason: Optional[str] = None
+
+    # V2.6 explainability/evidence packet for Dashboard + Professor.
+    zone_interaction_time: Optional[str] = None
+    trigger_time: Optional[str] = None
+    trigger_price: Optional[float] = None
+    trigger_type: Optional[str] = None
+    evidence: list[dict[str, Any]] = field(default_factory=list)
 
     conditions_met: int = 0
     conditions_total: int = 4

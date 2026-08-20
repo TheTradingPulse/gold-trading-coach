@@ -1,5 +1,5 @@
 """
-The Trading Pulse - Market State Builder V2.5
+The Trading Pulse - Market State Builder V2.6
 
 Authoritative deterministic market-state builder.
 
@@ -59,11 +59,9 @@ from instruments import get_instrument
 from market_state import (
     MarketState,
     ZoneState,
-    ConfirmationState,
-    TargetState,
-    TradeState,
     create_empty_market_state,
 )
+from confirmation_engine import evaluate_setup_lifecycle
 from trend_engine import assess_trend
 from zone_engine import detect_supply_zones, detect_demand_zones
 
@@ -649,270 +647,10 @@ def find_opposing_zone_conflict(
 
 
 # ---------------------------------------------------------------------
-# STRUCTURAL CONFIRMATION / RISK
+# CONFIRMATION / RISK
 # ---------------------------------------------------------------------
-
-CONFIRMATION_TIMEFRAMES = ["5m", "1m"]
-MIN_RR_FOR_READY = 2.0
-STOP_BUFFER_TICKS = 2
-
-
-def _directional_bar(row, direction: str) -> bool:
-    if direction == "LONG":
-        return float(row["close"]) > float(row["open"])
-    if direction == "SHORT":
-        return float(row["close"]) < float(row["open"])
-    return False
-
-
-def evaluate_lower_timeframe_confirmation(
-    direction: Optional[str],
-    execution_zone: Optional[ZoneState],
-):
-    """
-    Deterministic confirmation:
-    - Price must have traded into the execution zone recently.
-    - Latest closed candle must agree with setup direction.
-    - Latest close must reclaim/break the prior candle extreme in setup direction.
-
-    5m is preferred; 1m is fallback.
-    """
-    if direction is None or execution_zone is None:
-        return False, False, None, "No directional execution zone."
-
-    for timeframe in CONFIRMATION_TIMEFRAMES:
-        df = load_market_data(timeframe, limit=12)
-        if df is None or len(df) < 4:
-            continue
-
-        df = df.dropna(subset=["open", "high", "low", "close"])
-        if len(df) < 4:
-            continue
-
-        recent = df.tail(6)
-        touched = bool(
-            (
-                (recent["low"] <= execution_zone.upper_bound)
-                & (recent["high"] >= execution_zone.lower_bound)
-            ).any()
-        )
-        if not touched:
-            continue
-
-        last = recent.iloc[-1]
-        prev = recent.iloc[-2]
-        directional = _directional_bar(last, direction)
-
-        if direction == "LONG":
-            structural = float(last["close"]) > float(prev["high"])
-            reason = "Bullish close broke the prior candle high after zone interaction."
-        else:
-            structural = float(last["close"]) < float(prev["low"])
-            reason = "Bearish close broke the prior candle low after zone interaction."
-
-        if directional and structural:
-            return True, True, timeframe, reason
-
-        if directional:
-            return True, False, timeframe, (
-                f"{timeframe} candle agrees with {direction}, "
-                "but structural break is still missing."
-            )
-
-        return False, False, timeframe, (
-            f"{timeframe} latest candle does not confirm {direction}."
-        )
-
-    return False, False, None, "No recent 5m/1m execution-zone interaction."
-
-
-def build_trade_plan(
-    instrument,
-    current_price: float,
-    direction: Optional[str],
-    execution_zone: Optional[ZoneState],
-    confirmation: ConfirmationState,
-    opposing_conflict: Optional[ZoneState],
-):
-    """
-    Build a deterministic trade plan only after confirmation.
-
-    Entry:
-        current confirmed market price
-    Stop:
-        beyond execution-zone invalidation by two instrument ticks
-    Targets:
-        1R / 2R / 3R
-
-    This is a rule-based plan, not an AI prediction.
-    """
-    if (
-        direction is None
-        or execution_zone is None
-        or opposing_conflict is not None
-        or not confirmation.price_in_zone
-        or not confirmation.lower_timeframe_confirmed
-        or not confirmation.structural_trigger
-    ):
-        confirmation.risk_validated = False
-        confirmation.risk_reason = "Risk plan waits for a clean, confirmed execution setup."
-        return None
-
-    tick = float(instrument.tick_size)
-    buffer_points = tick * STOP_BUFFER_TICKS
-    entry = float(current_price)
-
-    if direction == "LONG":
-        stop = float(execution_zone.lower_bound) - buffer_points
-        risk_points = entry - stop
-    else:
-        stop = float(execution_zone.upper_bound) + buffer_points
-        risk_points = stop - entry
-
-    if risk_points <= 0:
-        confirmation.risk_validated = False
-        confirmation.risk_reason = "Calculated stop does not create positive risk distance."
-        return None
-
-    risk_ticks = risk_points / tick
-    risk_dollars = instrument.dollars_for_points(risk_points)
-
-    targets = []
-    for multiple, name in [(1.0, "T1"), (2.0, "T2"), (3.0, "T3")]:
-        target_price = (
-            entry + risk_points * multiple
-            if direction == "LONG"
-            else entry - risk_points * multiple
-        )
-        targets.append(
-            TargetState(
-                name=name,
-                price=round(target_price, 4),
-                reward_points=round(risk_points * multiple, 4),
-                reward_ticks=round(risk_ticks * multiple, 2),
-                reward_dollars_per_contract=round(risk_dollars * multiple, 2),
-                rr_ratio=multiple,
-            )
-        )
-
-    confirmation.risk_validated = True
-    confirmation.risk_reason = (
-        f"Stop is {STOP_BUFFER_TICKS} ticks beyond execution-zone invalidation; "
-        f"T2 provides {MIN_RR_FOR_READY:.1f}R."
-    )
-
-    return TradeState(
-        direction=direction,
-        entry=round(entry, 4),
-        stop=round(stop, 4),
-        targets=targets,
-        risk_points=round(risk_points, 4),
-        risk_ticks=round(risk_ticks, 2),
-        risk_dollars_per_contract=round(risk_dollars, 2),
-        setup_grade=execution_zone.grade,
-        historical_probability=None,
-        probability_sample_size=None,
-    )
-
-
-# ---------------------------------------------------------------------
-# SETUP LIFECYCLE
-# ---------------------------------------------------------------------
-
-def determine_setup_state(
-    current_price: float,
-    execution_zone: Optional[ZoneState],
-    bias: str,
-    opposing_conflict: Optional[ZoneState],
-    instrument,
-):
-    confirmation = ConfirmationState(conditions_total=4)
-
-    if execution_zone is None:
-        confirmation.missing_conditions = ["Qualifying execution zone required"]
-        return "SCANNING", None, confirmation, None
-
-    direction = (
-        "LONG" if bias == "bullish"
-        else "SHORT" if bias == "bearish"
-        else None
-    )
-
-    in_zone = execution_zone.contains(current_price)
-    confirmation.price_in_zone = in_zone
-
-    if opposing_conflict is not None:
-        confirmation.missing_conditions = [
-            "Opposing-zone conflict must resolve",
-            "Price must be in a clean execution zone",
-            "Lower-timeframe confirmation required",
-            "Structural trigger required",
-            "Risk validation required",
-        ]
-        return "WATCHING", direction, confirmation, None
-
-    if not in_zone:
-        confirmation.missing_conditions = [
-            "Price must reach the execution zone",
-            "Lower-timeframe confirmation required",
-            "Structural trigger required",
-            "Risk validation required",
-        ]
-        state = (
-            "APPROACHING"
-            if float(execution_zone.distance_percent or 0) <= 0.35
-            else "WATCHING"
-        )
-        return state, direction, confirmation, None
-
-    (
-        ltf_confirmed,
-        structural_trigger,
-        confirmation_tf,
-        confirmation_reason,
-    ) = evaluate_lower_timeframe_confirmation(direction, execution_zone)
-
-    confirmation.lower_timeframe_confirmed = ltf_confirmed
-    confirmation.structural_trigger = structural_trigger
-    confirmation.confirmation_timeframe = confirmation_tf
-    confirmation.confirmation_reason = confirmation_reason
-    confirmation.structural_reason = confirmation_reason
-
-    trade = build_trade_plan(
-        instrument,
-        current_price,
-        direction,
-        execution_zone,
-        confirmation,
-        opposing_conflict,
-    )
-
-    confirmation.conditions_met = sum(
-        [
-            confirmation.price_in_zone,
-            confirmation.lower_timeframe_confirmed,
-            confirmation.structural_trigger,
-            confirmation.risk_validated,
-        ]
-    )
-
-    missing = []
-    if not confirmation.lower_timeframe_confirmed:
-        missing.append("Lower-timeframe confirmation required")
-    if not confirmation.structural_trigger:
-        missing.append("Structural trigger required")
-    if not confirmation.risk_validated:
-        missing.append("Risk validation required")
-    confirmation.missing_conditions = missing
-
-    if trade is not None and confirmation.conditions_met == confirmation.conditions_total:
-        return "TRADE_READY", direction, confirmation, trade
-
-    if ltf_confirmed or structural_trigger:
-        return "CONFIRMING", direction, confirmation, None
-
-    return "IN_ZONE", direction, confirmation, None
-
+# V2.6 delegates evidence, structural confirmation, lifecycle gating,
+# and deterministic risk construction to core/confirmation_engine.py.
 
 # ---------------------------------------------------------------------
 # BUILDER
@@ -1026,12 +764,13 @@ def build_market_state(
         setup_direction,
         confirmation,
         trade,
-    ) = determine_setup_state(
+    ) = evaluate_setup_lifecycle(
         state.current_price,
         execution_zone,
         bias,
         opposing_conflict,
         instrument,
+        load_market_data,
     )
 
     state.setup_state = setup_state
@@ -1046,7 +785,7 @@ def build_market_state(
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.5",
+        "architecture_version": "2.6",
         "price_source_timeframe": price_timeframe,
         "storage_status": "GC-only legacy storage",
         "trade_values_generated_by_ai": False,
@@ -1054,6 +793,7 @@ def build_market_state(
             "setup_state": state.setup_state,
             "direction": state.setup_direction,
             "confirmation": state.confirmation.__dict__,
+            "confirmation_evidence": state.confirmation.evidence,
             "trade": state.trade.__dict__ if state.trade else None,
             "historical_probability": None,
             "guardrail": "Professor explains deterministic state; it does not invent missing trade values.",
@@ -1087,12 +827,12 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.5",
+        "market_state": "2.6",
         "trend": "legacy_v1",
         "zones": "legacy_v1",
         "zone_selector": "v2.5_hierarchical",
-        "confirmation": "v2.5_price_action",
-        "risk": "v2.5_zone_invalidation",
+        "confirmation": "v2.6_evidence_engine",
+        "risk": "v2.6_zone_invalidation",
     }
 
     missing_timeframes = [
@@ -1132,7 +872,7 @@ def print_market_state(
     print("=" * 68)
     print(
         " THE TRADING PULSE - "
-        "LIVE MARKET STATE V2.5"
+        "LIVE MARKET STATE V2.6"
     )
     print("=" * 68)
 
