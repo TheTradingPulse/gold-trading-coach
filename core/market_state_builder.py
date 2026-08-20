@@ -1,5 +1,6 @@
+
 """
-The Trading Pulse - Market State Builder V2.7
+The Trading Pulse - Market State Builder V2.8A
 
 Authoritative deterministic market-state builder.
 
@@ -21,6 +22,7 @@ Important:
 - Opposing-zone overlap creates conflict instead of false certainty.
 - Entries, stops, targets, confirmation, and readiness are deterministic when qualified.
 - Historical probability remains blank until validated comparable-setup statistics exist.
+- V2.8A adds a canonical LIVE/REPLAY market clock and enforces the replay cutoff at the database boundary.
 """
 
 import sys
@@ -56,6 +58,7 @@ for path in (str(PROJECT_ROOT), str(ANALYSIS_DIR), str(CORE_DIR)):
 
 from database import get_connection
 from instruments import get_instrument
+from market_clock import MarketClock, live_clock, replay_clock, normalize_timestamp
 from market_state import (
     MarketState,
     ZoneState,
@@ -103,6 +106,7 @@ ZONE_TIMEFRAME_WEIGHT = {
 def load_market_data(
     timeframe: str,
     limit: int = 500,
+    as_of=None,
 ) -> Optional[pd.DataFrame]:
 
     conn = None
@@ -110,13 +114,28 @@ def load_market_data(
     try:
         conn = get_connection()
 
-        query = """
-            SELECT timestamp, open, high, low, close, volume
-            FROM gold_ohlcv
-            WHERE timeframe = %s
-            ORDER BY timestamp DESC
-            LIMIT %s
-        """
+        cutoff = normalize_timestamp(as_of) if as_of is not None else None
+
+        if cutoff is None:
+            query = """
+                SELECT timestamp, open, high, low, close, volume
+                FROM gold_ohlcv
+                WHERE timeframe = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """
+            params = (timeframe, limit)
+        else:
+            # V2.8A HARD REPLAY GUARDRAIL: future candles cannot cross this boundary.
+            query = """
+                SELECT timestamp, open, high, low, close, volume
+                FROM gold_ohlcv
+                WHERE timeframe = %s
+                  AND timestamp <= %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """
+            params = (timeframe, cutoff.to_pydatetime(), limit)
 
         # pandas 3 warns about raw DBAPI connections.
         # Existing Trading Pulse database access is still valid.
@@ -129,7 +148,7 @@ def load_market_data(
             df = pd.read_sql_query(
                 query,
                 conn,
-                params=(timeframe, limit),
+                params=params,
             )
 
         if df.empty:
@@ -160,7 +179,7 @@ def load_market_data(
                 pass
 
 
-def get_latest_market_price():
+def get_latest_market_price(as_of=None):
     for timeframe in [
         "1m",
         "5m",
@@ -172,6 +191,7 @@ def get_latest_market_price():
         df = load_market_data(
             timeframe,
             limit=1,
+            as_of=as_of,
         )
 
         if df is None or df.empty:
@@ -195,13 +215,14 @@ def get_latest_market_price():
 # TRENDS
 # ---------------------------------------------------------------------
 
-def build_trends() -> dict[str, str]:
+def build_trends(as_of=None) -> dict[str, str]:
     trends = {}
 
     for timeframe in TIMEFRAMES:
         df = load_market_data(
             timeframe,
             limit=200,
+            as_of=as_of,
         )
 
         if df is None or len(df) < 50:
@@ -382,6 +403,7 @@ def convert_zone(
 
 def build_zones(
     current_price: float,
+    as_of=None,
 ):
     supply = []
     demand = []
@@ -390,6 +412,7 @@ def build_zones(
         df = load_market_data(
             timeframe,
             limit=500,
+            as_of=as_of,
         )
 
         if df is None or len(df) < 15:
@@ -659,7 +682,18 @@ def find_opposing_zone_conflict(
 
 def build_market_state(
     symbol: str = "GC",
+    as_of=None,
+    clock: Optional[MarketClock] = None,
 ) -> MarketState:
+
+    # V2.8A: one canonical clock controls the entire state build.
+    # Passing as_of creates REPLAY mode; omitting it preserves LIVE behavior.
+    if clock is None:
+        clock = replay_clock(as_of) if as_of is not None else live_clock()
+    elif as_of is not None:
+        raise ValueError("Pass either clock= or as_of=, not both.")
+
+    cutoff = clock.cutoff
 
     instrument = get_instrument(
         symbol
@@ -679,7 +713,7 @@ def build_market_state(
         price,
         market_timestamp,
         price_timeframe,
-    ) = get_latest_market_price()
+    ) = get_latest_market_price(as_of=cutoff)
 
     if price is None:
         state.warnings.append(
@@ -703,7 +737,7 @@ def build_market_state(
     # Trend context
     # --------------------------------------------------------------
 
-    trends = build_trends()
+    trends = build_trends(as_of=cutoff)
 
     state.trends = trends
 
@@ -724,7 +758,8 @@ def build_market_state(
         supply_zones,
         demand_zones,
     ) = build_zones(
-        state.current_price
+        state.current_price,
+        as_of=cutoff,
     )
 
     state.supply_zones = supply_zones
@@ -760,6 +795,9 @@ def build_market_state(
     # Setup lifecycle
     # --------------------------------------------------------------
 
+    def clocked_market_data(timeframe: str, limit: int = 500):
+        return load_market_data(timeframe, limit=limit, as_of=cutoff)
+
     (
         setup_state,
         setup_direction,
@@ -769,7 +807,7 @@ def build_market_state(
         execution_zone,
         bias,
         opposing_conflict,
-        load_market_data,
+        clocked_market_data,
     )
 
     # V2.7: confirmation and trade planning are separate deterministic engines.
@@ -819,7 +857,13 @@ def build_market_state(
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.7",
+        "architecture_version": "2.8A",
+        "market_clock": clock.to_dict(),
+        "replay_guardrail": {
+            "enabled": clock.is_replay,
+            "cutoff": clock.cutoff_iso,
+            "future_data_allowed": False if clock.is_replay else None,
+        },
         "price_source_timeframe": price_timeframe,
         "storage_status": "GC-only legacy storage",
         "trade_values_generated_by_ai": False,
@@ -861,7 +905,8 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.7",
+        "market_state": "2.8A",
+        "market_clock": "v2.8A",
         "trend": "legacy_v1",
         "zones": "legacy_v1",
         "zone_selector": "v2.5_hierarchical",
@@ -906,7 +951,7 @@ def print_market_state(
     print("=" * 68)
     print(
         " THE TRADING PULSE - "
-        "LIVE MARKET STATE V2.7"
+        "MARKET STATE V2.8A"
     )
     print("=" * 68)
 
