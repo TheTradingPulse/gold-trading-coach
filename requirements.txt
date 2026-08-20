@@ -1,0 +1,10 @@
+streamlit
+streamlit-autorefresh
+pandas
+numpy
+yfinance
+psycopg2-binary
+python-dotenv
+mplfinance
+python-telegram-bot
+sqlalchemy
