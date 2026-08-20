@@ -59,6 +59,7 @@ for path in (str(PROJECT_ROOT), str(ANALYSIS_DIR), str(CORE_DIR)):
 from database import get_connection
 from instruments import get_instrument
 from market_clock import MarketClock, live_clock, replay_clock, normalize_timestamp
+from setup_fingerprint import build_setup_fingerprint
 from market_state import (
     MarketState,
     ZoneState,
@@ -857,7 +858,8 @@ def build_market_state(
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.8A",
+        "architecture_version": "2.8C",
+        "setup_fingerprint": build_setup_fingerprint(state, clock=clock),
         "market_clock": clock.to_dict(),
         "replay_guardrail": {
             "enabled": clock.is_replay,
@@ -905,7 +907,9 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.8A",
+        "market_state": "2.8C",
+        "setup_fingerprint": "v2.8B",
+        "historical_replay": "v2.8C",
         "market_clock": "v2.8A",
         "trend": "legacy_v1",
         "zones": "legacy_v1",
@@ -951,7 +955,7 @@ def print_market_state(
     print("=" * 68)
     print(
         " THE TRADING PULSE - "
-        "MARKET STATE V2.8A"
+        "MARKET STATE V2.8C"
     )
     print("=" * 68)
 
