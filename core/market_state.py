@@ -77,8 +77,13 @@ class ConfirmationState:
     structural_trigger: bool = False
     risk_validated: bool = False
 
+    confirmation_timeframe: Optional[str] = None
+    confirmation_reason: Optional[str] = None
+    structural_reason: Optional[str] = None
+    risk_reason: Optional[str] = None
+
     conditions_met: int = 0
-    conditions_total: int = 0
+    conditions_total: int = 4
 
     missing_conditions: list[str] = field(default_factory=list)
 

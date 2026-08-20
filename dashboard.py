@@ -1,31 +1,30 @@
 """
-The Trading Pulse
-Gold Trading Coach V2.1
+THE TRADING PULSE
+Gold Trading Coach V2.5.1 Dashboard
 
-Dashboard-first development build.
+Rules:
+- MarketState is the single source of truth.
+- Dashboard never invents trade signals, entries, stops, targets, or probabilities.
+- Higher-timeframe zones are context.
+- Tactical zones are execution locations.
+- Opposing-zone conflicts are surfaced.
+- Charts show only decision-useful information.
+- Professor consumes the same MarketState shown to the trader.
+- GC is production instrument #1; UI is structured for future multi-symbol support.
 
-V2.1 goals:
-- Make the live chart the center of the application
-- Support multiple chart timeframes
-- Surface market bias and setup status immediately
-- Show the best supply/demand zones to watch
-- Preserve the existing journal, statistics and backtest functionality
-- Do NOT fabricate probability or Professor outputs before those engines exist
-
-This file intentionally continues using the existing V1 engines so that
-the dashboard can be upgraded incrementally without replacing the entire
-application at once.
+IMPORTANT:
+This source is intentionally ASCII-only to avoid Windows PowerShell / cp1252
+encoding corruption.
 """
 
-import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from io import StringIO
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import altair as alt
 
 # ---------------------------------------------------------------------
 # PATHS / EXISTING ENGINES
@@ -37,68 +36,48 @@ sys.path.insert(0, "analysis")
 from streamlit_autorefresh import st_autorefresh
 
 from database import get_connection
-from zone_engine import (
-    load_data,
-    detect_supply_zones,
-    detect_demand_zones,
-    is_price_near_zone,
-)
-from trade_engine import (
-    get_current_price,
-    get_trends,
-    calculate_alignment,
-    grade_setup,
-)
-from live_data_engine import (
-    fetch_latest_data,
-    get_data_source_name,
-)
-from journal_engine import (
-    calculate_statistics,
-    get_all_trades,
-    update_outcome,
-)
-from dna_engine import (
-    log_trade_with_dna,
-    analyze_dna_performance,
-)
-from ai_explainer import generate_explanation
-from news_engine import (
-    generate_news_warning,
-    get_confidence_adjustment,
-    display_news_calendar,
-)
-from backtest_engine import (
-    run_backtest,
-    get_available_years,
-)
+from market_state_builder import build_market_state, load_market_data
+from live_data_engine import fetch_latest_data, get_data_source_name
+from journal_engine import calculate_statistics, get_all_trades, update_outcome
+from dna_engine import analyze_dna_performance
+from news_engine import generate_news_warning, display_news_calendar
+from backtest_engine import run_backtest, get_available_years
 
 
 # ---------------------------------------------------------------------
-# STREAMLIT CONFIG
+# PAGE
 # ---------------------------------------------------------------------
 
 st.set_page_config(
     page_title="The Trading Pulse | Gold",
-    page_icon="🥇",
+    page_icon="TP",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# Refresh once per minute.
-st_autorefresh(interval=60 * 1000, key="v2_auto_refresh")
+st_autorefresh(interval=60 * 1000, key="tp_auto_refresh")
 
 
 # ---------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------
 
-APP_NAME = "The Trading Pulse"
-COACH_NAME = "Gold Trading Coach"
-
+APP_NAME = "THE TRADING PULSE"
+COACH_NAME = "GOLD TRADING COACH"
 DISPLAY_SYMBOL = "GC"
-DATA_SYMBOL = "GC=F"
-MARKET_NAME = "COMEX Gold Futures"
+MARKET_NAME = "COMEX GOLD FUTURES"
+ACCENT = "#d7b45a"
+ACCENT_SOFT = "#f0d98a"
+BG = "#07090d"
+PANEL = "#0d1118"
+PANEL_2 = "#111722"
+BORDER = "#242c39"
+TEXT = "#f5f7fa"
+MUTED = "#b3bdcb"
+GREEN = "#22c55e"
+RED = "#ef4444"
+BLUE = "#3b82f6"
+AMBER = "#f59e0b"
 
 CHART_TIMEFRAMES = {
     "1m": "1m",
@@ -108,10 +87,13 @@ CHART_TIMEFRAMES = {
     "1H": "1H",
     "4H": "4H",
     "1D": "D",
+    "1W": "W",
 }
 
 TREND_DISPLAY_ORDER = [
-    ("1D", "D"),
+    ("M", "M"),
+    ("W", "W"),
+    ("D", "D"),
     ("4H", "4H"),
     ("1H", "1H"),
     ("15m", "15m"),
@@ -121,92 +103,398 @@ TREND_DISPLAY_ORDER = [
 
 DEFAULT_CHART_TF = "15m"
 
-# Current V1 logic considers a zone "near" at 0.5%.
-TRADE_ZONE_TOLERANCE_PCT = 0.5
-
 
 # ---------------------------------------------------------------------
-# CSS
+# BRAND CSS
 # ---------------------------------------------------------------------
 
 st.markdown(
-    """
+    f"""
     <style>
-        .block-container {
-            max-width: 1550px;
-            padding-top: 1.1rem;
-            padding-bottom: 3rem;
-        }
+    :root {{
+        --tp-bg: {BG};
+        --tp-panel: {PANEL};
+        --tp-panel2: {PANEL_2};
+        --tp-border: {BORDER};
+        --tp-text: {TEXT};
+        --tp-muted: {MUTED};
+        --tp-gold: {ACCENT};
+        --tp-gold2: {ACCENT_SOFT};
+        --tp-green: {GREEN};
+        --tp-red: {RED};
+    }}
 
-        [data-testid="stMetric"] {
-            border: 1px solid rgba(128, 128, 128, 0.22);
-            border-radius: 12px;
-            padding: 12px 14px;
-            background: rgba(128, 128, 128, 0.035);
-        }
+    html, body, [class*="css"] {{
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                     "Segoe UI", sans-serif;
+    }}
 
-        .tp-eyebrow {
-            font-size: 0.78rem;
-            letter-spacing: 0.09em;
-            font-weight: 700;
-            opacity: 0.62;
-            margin-bottom: 0.15rem;
-        }
+    .stApp {{
+        background:
+            radial-gradient(circle at 15% 0%, rgba(215,180,90,.08), transparent 28rem),
+            radial-gradient(circle at 85% 10%, rgba(59,130,246,.045), transparent 30rem),
+            var(--tp-bg);
+        color: var(--tp-text);
+    }}
 
-        .tp-title {
-            font-size: 2.15rem;
-            line-height: 1.1;
-            font-weight: 800;
-            margin-bottom: 0.15rem;
-        }
+    [data-testid="stHeader"] {{
+        background: rgba(7,9,13,.85);
+    }}
 
-        .tp-subtitle {
-            font-size: 0.93rem;
-            opacity: 0.68;
-            margin-bottom: 0.25rem;
-        }
+    [data-testid="stToolbar"] {{
+        right: 1rem;
+    }}
 
-        .tp-section {
-            font-size: 1.18rem;
-            font-weight: 750;
-            margin-top: 0.25rem;
-            margin-bottom: 0.5rem;
-        }
+    .block-container {{
+        max-width: 1700px;
+        padding-top: 1.25rem;
+        padding-bottom: 4rem;
+    }}
 
-        .tp-panel {
-            border: 1px solid rgba(128, 128, 128, 0.22);
-            border-radius: 14px;
-            padding: 16px;
-            background: rgba(128, 128, 128, 0.025);
-            margin-bottom: 10px;
-        }
+    hr {{
+        border-color: rgba(255,255,255,.07) !important;
+    }}
 
-        .tp-small {
-            font-size: 0.82rem;
-            opacity: 0.68;
-        }
+    .tp-topline {{
+        height: 2px;
+        width: 100%;
+        background: linear-gradient(90deg, transparent, var(--tp-gold), transparent);
+        opacity: .75;
+        margin-bottom: 18px;
+    }}
 
-        .tp-zone-title {
-            font-weight: 750;
-            margin-bottom: 3px;
-        }
+    .tp-brand-row {{
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }}
 
-        .tp-status-big {
-            font-size: 1.28rem;
-            font-weight: 800;
-        }
+    .tp-mark {{
+        width: 46px;
+        height: 46px;
+        border: 1px solid rgba(215,180,90,.55);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--tp-gold2);
+        font-weight: 900;
+        letter-spacing: -.06em;
+        background: linear-gradient(145deg, rgba(215,180,90,.13), rgba(255,255,255,.015));
+        box-shadow: 0 0 30px rgba(215,180,90,.08);
+    }}
 
-        div[data-testid="stButton"] > button {
-            border-radius: 10px;
-        }
+    .tp-eyebrow {{
+        color: var(--tp-gold);
+        font-size: .72rem;
+        letter-spacing: .18em;
+        font-weight: 850;
+        text-transform: uppercase;
+    }}
 
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 0.35rem;
-        }
+    .tp-title {{
+        color: var(--tp-text);
+        font-size: clamp(1.65rem, 2.3vw, 2.6rem);
+        line-height: 1.02;
+        font-weight: 900;
+        letter-spacing: -.045em;
+        margin-top: 3px;
+    }}
 
-        .stTabs [data-baseweb="tab"] {
-            border-radius: 8px 8px 0 0;
-        }
+    .tp-subtitle {{
+        color: var(--tp-muted);
+        font-size: .83rem;
+        margin-top: 8px;
+        letter-spacing: .025em;
+    }}
+
+    .tp-section-label {{
+        color: var(--tp-gold);
+        font-size: .68rem;
+        font-weight: 850;
+        letter-spacing: .16em;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+    }}
+
+    .tp-section-title {{
+        color: var(--tp-text);
+        font-size: 1.22rem;
+        font-weight: 850;
+        letter-spacing: -.02em;
+        margin-bottom: 12px;
+    }}
+
+    .tp-card {{
+        border: 1px solid var(--tp-border);
+        border-radius: 14px;
+        background: linear-gradient(145deg, rgba(17,23,34,.96), rgba(10,14,20,.96));
+        padding: 15px 16px;
+        min-height: 102px;
+        box-shadow: 0 10px 28px rgba(0,0,0,.16);
+    }}
+
+    .tp-card.gold {{
+        border-color: rgba(215,180,90,.35);
+        background: linear-gradient(145deg, rgba(215,180,90,.08), rgba(13,17,24,.96));
+    }}
+
+    .tp-card.red {{
+        border-color: rgba(239,68,68,.32);
+        background: linear-gradient(145deg, rgba(239,68,68,.07), rgba(13,17,24,.96));
+    }}
+
+    .tp-card.green {{
+        border-color: rgba(34,197,94,.28);
+        background: linear-gradient(145deg, rgba(34,197,94,.06), rgba(13,17,24,.96));
+    }}
+
+    .tp-kicker {{
+        color: var(--tp-muted);
+        font-size: .66rem;
+        font-weight: 800;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+        margin-bottom: 7px;
+    }}
+
+    .tp-value {{
+        color: var(--tp-text);
+        font-size: 1.24rem;
+        font-weight: 850;
+        letter-spacing: -.025em;
+        line-height: 1.1;
+    }}
+
+    .tp-value.gold {{
+        color: var(--tp-gold2);
+    }}
+
+    .tp-detail {{
+        color: var(--tp-muted);
+        font-size: .76rem;
+        line-height: 1.5;
+        margin-top: 7px;
+    }}
+
+    .tp-status {{
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: .68rem;
+        font-weight: 850;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        border: 1px solid var(--tp-border);
+        background: rgba(255,255,255,.025);
+    }}
+
+    .tp-dot {{
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        display: inline-block;
+    }}
+
+    .tp-professor {{
+        border: 1px solid rgba(215,180,90,.32);
+        border-radius: 16px;
+        padding: 18px;
+        background:
+            radial-gradient(circle at 0% 0%, rgba(215,180,90,.10), transparent 17rem),
+            linear-gradient(145deg, rgba(17,23,34,.98), rgba(9,12,18,.98));
+        box-shadow: 0 14px 40px rgba(0,0,0,.20);
+    }}
+
+    .tp-prof-title {{
+        color: var(--tp-text);
+        font-size: 1.08rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }}
+
+    .tp-prof-copy {{
+        color: var(--tp-muted);
+        font-size: .82rem;
+        line-height: 1.55;
+        margin-top: 6px;
+    }}
+
+    .tp-rule {{
+        border-left: 2px solid rgba(215,180,90,.6);
+        padding: 7px 0 7px 11px;
+        color: #c9d0da;
+        font-size: .79rem;
+        margin: 6px 0;
+    }}
+
+    [data-testid="stMetric"] {{
+        background: linear-gradient(145deg, rgba(17,23,34,.94), rgba(10,14,20,.94));
+        border: 1px solid var(--tp-border);
+        border-radius: 13px;
+        padding: 13px 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.13);
+    }}
+
+    [data-testid="stMetricLabel"] {{
+        color: var(--tp-muted);
+        font-size: .72rem;
+        letter-spacing: .04em;
+    }}
+
+    [data-testid="stMetricValue"] {{
+        color: var(--tp-text);
+        font-weight: 850;
+        letter-spacing: -.025em;
+    }}
+
+    div[data-testid="stButton"] > button {{
+        border-radius: 10px;
+        border: 1px solid var(--tp-border);
+        background: #0f141d;
+        color: #d8dee8;
+        font-weight: 750;
+        transition: all .15s ease;
+    }}
+
+    div[data-testid="stButton"] > button:hover {{
+        border-color: rgba(215,180,90,.55);
+        color: var(--tp-gold2);
+        transform: translateY(-1px);
+    }}
+
+    div[data-testid="stButton"] > button[kind="primary"] {{
+        background: linear-gradient(135deg, #d7b45a, #a98635);
+        color: #080a0d;
+        border-color: #d7b45a;
+        font-weight: 900;
+    }}
+
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: .35rem;
+        background: rgba(13,17,24,.72);
+        border: 1px solid var(--tp-border);
+        border-radius: 12px;
+        padding: 5px;
+    }}
+
+    .stTabs [data-baseweb="tab"] {{
+        border-radius: 8px;
+        color: var(--tp-muted);
+        font-weight: 750;
+    }}
+
+    .stTabs [aria-selected="true"] {{
+        color: var(--tp-gold2) !important;
+        background: rgba(215,180,90,.08) !important;
+    }}
+
+    [data-testid="stDataFrame"] {{
+        border: 1px solid var(--tp-border);
+        border-radius: 12px;
+        overflow: hidden;
+    }}
+
+    [data-testid="stAlert"] {{
+        border-radius: 12px;
+    }}
+
+    .tp-footer {{
+        color: #687386;
+        text-align: center;
+        font-size: .72rem;
+        padding-top: 16px;
+        letter-spacing: .02em;
+    }}
+
+
+    /* V2.5.1 premium cleanup */
+    .tp-hero {{
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 18px;
+        padding: 16px 18px;
+        background:
+            radial-gradient(circle at 80% 10%, rgba(239,68,68,.11), transparent 20rem),
+            linear-gradient(135deg, rgba(17,23,34,.98), rgba(7,9,13,.98));
+        box-shadow: 0 18px 50px rgba(0,0,0,.22);
+        margin-bottom: 14px;
+    }}
+
+    .tp-hero-copy {{
+        color: #e7ebf1;
+        font-size: .92rem;
+        line-height: 1.55;
+        margin-top: 5px;
+    }}
+
+    .tp-hero-tag {{
+        color: #ef4444;
+        font-size: .68rem;
+        font-weight: 900;
+        letter-spacing: .18em;
+        text-transform: uppercase;
+    }}
+
+    .tp-trend-card {{
+        min-height: 88px;
+        border: 1px solid var(--tp-border);
+        border-radius: 12px;
+        padding: 11px 12px;
+        background: linear-gradient(145deg, rgba(17,23,34,.97), rgba(9,12,18,.97));
+        box-shadow: 0 8px 22px rgba(0,0,0,.15);
+        overflow: hidden;
+    }}
+
+    .tp-trend-card.bullish {{ border-top: 2px solid rgba(34,197,94,.85); }}
+    .tp-trend-card.bearish {{ border-top: 2px solid rgba(239,68,68,.85); }}
+    .tp-trend-card.neutral {{ border-top: 2px solid rgba(245,158,11,.75); }}
+
+    .tp-trend-tf {{
+        color: #aeb8c6;
+        font-size: .66rem;
+        font-weight: 850;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+    }}
+
+    .tp-trend-value {{
+        color: #f5f7fa;
+        font-size: .93rem;
+        font-weight: 900;
+        margin-top: 8px;
+        white-space: nowrap;
+    }}
+
+    .tp-trend-value.bullish {{ color: #4ade80; }}
+    .tp-trend-value.bearish {{ color: #fb7185; }}
+    .tp-trend-value.neutral {{ color: #fbbf24; }}
+
+    [data-testid="stCaptionContainer"],
+    [data-testid="stMarkdownContainer"] p {{
+        color: #b3bdcb;
+    }}
+
+    div[data-baseweb="input"] input:disabled {{
+        color: #c7d0dc !important;
+        -webkit-text-fill-color: #c7d0dc !important;
+        opacity: 1 !important;
+        background: #0c1119 !important;
+    }}
+
+    details {{
+        border: 1px solid rgba(255,255,255,.08) !important;
+        border-radius: 12px !important;
+        background: rgba(13,17,24,.78) !important;
+    }}
+
+    @media (max-width: 900px) {{
+        .block-container {{
+            padding-left: .8rem;
+            padding-right: .8rem;
+        }}
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -231,33 +519,12 @@ def safe_float(value, default=None):
 
 def money(value):
     value = safe_float(value)
-    if value is None:
-        return "—"
-    return f"${value:,.2f}"
+    return "--" if value is None else f"${value:,.2f}"
 
 
 def points(value):
     value = safe_float(value)
-    if value is None:
-        return "—"
-    return f"{value:,.2f} pts"
-
-
-def pct(value):
-    value = safe_float(value)
-    if value is None:
-        return "—"
-    return f"{value:.1f}%"
-
-
-def trend_icon(trend):
-    if trend == "bullish":
-        return "🟢"
-    if trend == "bearish":
-        return "🔴"
-    if trend == "neutral":
-        return "🟡"
-    return "⚪"
+    return "--" if value is None else f"{value:,.2f} pts"
 
 
 def trend_label(trend):
@@ -266,117 +533,72 @@ def trend_label(trend):
     return str(trend).upper()
 
 
-def zone_mid(zone):
-    return (float(zone["upper_bound"]) + float(zone["lower_bound"])) / 2.0
+def trend_symbol(trend):
+    if trend == "bullish":
+        return "UP"
+    if trend == "bearish":
+        return "DOWN"
+    if trend == "neutral":
+        return "FLAT"
+    return "--"
 
 
-def zone_width(zone):
-    return abs(float(zone["upper_bound"]) - float(zone["lower_bound"]))
+def trend_color(trend):
+    if trend == "bullish":
+        return GREEN
+    if trend == "bearish":
+        return RED
+    if trend == "neutral":
+        return AMBER
+    return MUTED
 
 
-def distance_to_zone(price, zone):
-    """
-    Distance from price to the nearest edge of the zone.
-    Returns 0 when price is already inside the zone.
-    """
-    if price is None or zone is None:
+def zone_dict(zone):
+    if zone is None:
         return None
-
-    lower = float(zone["lower_bound"])
-    upper = float(zone["upper_bound"])
-
-    if lower <= price <= upper:
-        return 0.0
-
-    if price < lower:
-        return lower - price
-
-    return price - upper
-
-
-def distance_pct_to_zone(price, zone):
-    d = distance_to_zone(price, zone)
-    if d is None or not price:
-        return None
-    return (d / price) * 100.0
+    if isinstance(zone, dict):
+        return zone
+    if hasattr(zone, "to_dict"):
+        try:
+            return zone.to_dict()
+        except Exception:
+            pass
+    if hasattr(zone, "__dict__"):
+        return dict(zone.__dict__)
+    return None
 
 
-def choose_best_demand(price, zones):
-    """
-    For a demand watch zone, prefer the closest zone at or below price.
-    If price is inside a zone, that zone naturally wins.
-    """
-    if not zones or price is None:
-        return None
-
-    candidates = []
-
-    for zone in zones:
-        lower = float(zone["lower_bound"])
-        upper = float(zone["upper_bound"])
-
-        # Demand far above price is not the primary pullback zone we want.
-        if lower > price:
-            continue
-
-        distance = distance_to_zone(price, zone)
-        strength = safe_float(zone.get("strength"), 0) or 0
-
-        candidates.append((distance, -strength, zone))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    return candidates[0][2]
+def data_health(timestamp_value):
+    if timestamp_value is None:
+        return "DISCONNECTED", None
+    try:
+        ts = pd.Timestamp(timestamp_value)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        now = pd.Timestamp.now(tz="UTC")
+        age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
+        if age_minutes <= 45:
+            return "CONNECTED", age_minutes
+        return "STALE", age_minutes
+    except Exception:
+        return "UNKNOWN", None
 
 
-def choose_best_supply(price, zones):
-    """
-    For a supply watch zone, prefer the closest zone at or above price.
-    """
-    if not zones or price is None:
-        return None
-
-    candidates = []
-
-    for zone in zones:
-        lower = float(zone["lower_bound"])
-        upper = float(zone["upper_bound"])
-
-        # Supply far below price is not the primary rally zone we want.
-        if upper < price:
-            continue
-
-        distance = distance_to_zone(price, zone)
-        strength = safe_float(zone.get("strength"), 0) or 0
-
-        candidates.append((distance, -strength, zone))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    return candidates[0][2]
+def get_news_state():
+    try:
+        warning, level = generate_news_warning()
+        return warning, level
+    except Exception:
+        return "Economic-event status unavailable.", "UNKNOWN"
 
 
 def resample_30m(df):
-    """
-    Build a temporary 30-minute chart from stored 15-minute candles.
-
-    V2.1 only:
-    The data engine does not currently persist 30m candles.
-    A later data-engine milestone will make 30m a native timeframe.
-    """
     if df is None or len(df) == 0:
         return None
-
     working = df.copy()
-
     if not isinstance(working.index, pd.DatetimeIndex):
         working.index = pd.to_datetime(working.index, utc=True)
-
-    result = (
+    return (
         working.resample("30min")
         .agg(
             {
@@ -390,288 +612,112 @@ def resample_30m(df):
         .dropna(subset=["open", "high", "low", "close"])
     )
 
-    return result
-
 
 @st.cache_data(ttl=20, show_spinner=False)
-def get_chart_data(display_tf, limit=240):
+def get_chart_data(display_tf, limit=260):
     db_tf = CHART_TIMEFRAMES[display_tf]
-
     if display_tf == "30m":
-        raw = load_data("15m", limit=limit * 2 + 20)
+        raw = load_market_data("15m", limit=limit * 2 + 20)
         return resample_30m(raw)
-
-    return load_data(db_tf, limit=limit)
-
-
-@st.cache_data(ttl=20, show_spinner=False)
-def get_zone_snapshot(timeframe="1H", limit=350):
-    df = load_data(timeframe, limit=limit)
-
-    if df is None or len(df) < 15:
-        return None, [], []
-
-    supply = detect_supply_zones(df)
-    demand = detect_demand_zones(df)
-
-    return df, supply, demand
+    return load_market_data(db_tf, limit=limit)
 
 
-def get_latest_timestamp():
-    """
-    Find the newest stored candle timestamp.
-    """
-    for tf in ["1m", "5m", "15m", "1H", "4H", "D"]:
-        try:
-            df = load_data(tf, limit=1)
-            if df is not None and len(df) > 0:
-                ts = pd.Timestamp(df.index[-1])
-                if ts.tzinfo is None:
-                    ts = ts.tz_localize("UTC")
-                return ts
-        except Exception:
-            continue
-
-    return None
+@st.cache_resource(ttl=15, show_spinner=False)
+def get_market_state():
+    return build_market_state("GC")
 
 
-def data_health(latest_ts):
-    """
-    V2.1 health indicator.
-
-    Yahoo Finance is not a true exchange-direct real-time feed.
-    Therefore the UI uses CONNECTED/STALE rather than claiming
-    exchange-level LIVE data.
-    """
-    if latest_ts is None:
-        return "DISCONNECTED", None
-
-    now = pd.Timestamp.now(tz="UTC")
-    age_minutes = max(0.0, (now - latest_ts).total_seconds() / 60.0)
-
-    # Current Yahoo intraday data may be delayed.
-    if age_minutes <= 45:
-        return "CONNECTED", age_minutes
-
-    return "STALE", age_minutes
+def get_zone_model(state):
+    return (state.professor_context or {}).get("zone_model", {})
 
 
-def get_news_state():
-    try:
-        warning, level = generate_news_warning()
-        return warning, level
-    except Exception:
-        return "News status unavailable", "UNKNOWN"
+def get_context_zone(state):
+    return get_zone_model(state).get("context_zone")
 
 
-def build_current_snapshot():
-    """
-    Build the V2.1 dashboard snapshot using the EXISTING engines.
+def get_execution_zone(state):
+    return get_zone_model(state).get("execution_zone")
 
-    This is intentionally not yet the final canonical setup object.
-    That will be introduced when the setup state machine and upgraded
-    trade engine are built.
-    """
-    current_price = get_current_price()
 
-    try:
-        trends = get_trends()
-    except Exception:
-        trends = {}
+def get_conflict_zone(state):
+    return get_zone_model(state).get("opposing_conflict")
 
-    try:
-        direction, alignment = calculate_alignment(trends)
-    except Exception:
-        direction, alignment = "neutral", 0
 
-    try:
-        zone_df, supply, demand = get_zone_snapshot("1H", 350)
-    except Exception:
-        zone_df, supply, demand = None, [], []
+def zone_summary(zone):
+    z = zone_dict(zone)
+    if not z:
+        return "No qualifying zone"
+    return (
+        f"{z.get('timeframe', '--')} {str(z.get('type', '')).upper()} | "
+        f"{money(z.get('lower_bound'))} - {money(z.get('upper_bound'))}"
+    )
 
-    if current_price is None and zone_df is not None and len(zone_df) > 0:
-        current_price = safe_float(zone_df["close"].iloc[-1])
 
-    best_demand = choose_best_demand(current_price, demand)
-    best_supply = choose_best_supply(current_price, supply)
+def render_section(label, title):
+    st.markdown(
+        f"""
+        <div class="tp-section-label">{label}</div>
+        <div class="tp-section-title">{title}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    near_demand = []
-    near_supply = []
 
-    if current_price is not None:
-        near_demand = [
-            z
-            for z in demand
-            if is_price_near_zone(
-                current_price,
-                z,
-                TRADE_ZONE_TOLERANCE_PCT,
-            )
-        ]
-
-        near_supply = [
-            z
-            for z in supply
-            if is_price_near_zone(
-                current_price,
-                z,
-                TRADE_ZONE_TOLERANCE_PCT,
-            )
-        ]
-
-    trade = None
-    status = "NO TRADE"
-    status_reason = "Price is not at a qualifying V1 zone."
-
-    # Preserve existing V1 signal logic for now.
-    # This will be replaced by the V2 setup state machine.
-    if alignment < 60:
-        status = "NO TRADE"
-        status_reason = (
-            f"Multi-timeframe alignment is {alignment:.0f}%, "
-            "below the current 60% V1 threshold."
+def render_zone_card(title, zone, role, variant=""):
+    z = zone_dict(zone)
+    css_variant = f" {variant}" if variant else ""
+    if not z:
+        st.markdown(
+            f"""
+            <div class="tp-card{css_variant}">
+                <div class="tp-kicker">{title}</div>
+                <div class="tp-value">No qualifying zone</div>
+                <div class="tp-detail">
+                    MarketState has not selected a {role.lower()} zone.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
+        return
 
-    elif direction == "bullish" and near_demand:
-        zone = near_demand[-1]
-        entry = current_price
-        stop = float(zone["lower_bound"]) * 0.998
-        risk = entry - stop if entry is not None else None
-        target = entry + (risk * 3.0) if risk and risk > 0 else None
-        grade = grade_setup(alignment, zone.get("strength", 0))
+    lower = safe_float(z.get("lower_bound"))
+    upper = safe_float(z.get("upper_bound"))
+    strength = safe_float(z.get("strength"), 0)
+    distance = safe_float(z.get("distance_points"))
+    distance_pct = safe_float(z.get("distance_percent"), 0)
+    timeframe = z.get("timeframe", "--")
+    zone_type = str(z.get("type", "")).upper()
+    grade = z.get("grade", "--")
+    width = upper - lower if upper is not None and lower is not None else None
 
-        trade = {
-            "direction": "LONG",
-            "entry": entry,
-            "stop": stop,
-            "target_1": target,
-            "target_2": None,
-            "target_3": None,
-            "rr": 3.0 if target is not None else None,
-            "grade": grade,
-            "zone": zone,
-            "zone_type": "demand",
-            "timeframe": "1H",
-            "alignment": alignment,
-        }
-
-        status = "TRADE AVAILABLE"
-        status_reason = (
-            "Existing V1 logic sees bullish alignment and price near "
-            "a detected 1H demand zone."
-        )
-
-    elif direction == "bearish" and near_supply:
-        zone = near_supply[-1]
-        entry = current_price
-        stop = float(zone["upper_bound"]) * 1.002
-        risk = stop - entry if entry is not None else None
-        target = entry - (risk * 3.0) if risk and risk > 0 else None
-        grade = grade_setup(alignment, zone.get("strength", 0))
-
-        trade = {
-            "direction": "SHORT",
-            "entry": entry,
-            "stop": stop,
-            "target_1": target,
-            "target_2": None,
-            "target_3": None,
-            "rr": 3.0 if target is not None else None,
-            "grade": grade,
-            "zone": zone,
-            "zone_type": "supply",
-            "timeframe": "1H",
-            "alignment": alignment,
-        }
-
-        status = "TRADE AVAILABLE"
-        status_reason = (
-            "Existing V1 logic sees bearish alignment and price near "
-            "a detected 1H supply zone."
-        )
-
-    else:
-        if direction == "bullish" and best_demand:
-            status = "WATCHING LONG"
-            status_reason = (
-                "Bullish bias is present. Waiting for price to reach "
-                "the best nearby 1H demand zone."
-            )
-
-        elif direction == "bearish" and best_supply:
-            status = "WATCHING SHORT"
-            status_reason = (
-                "Bearish bias is present. Waiting for price to reach "
-                "the best nearby 1H supply zone."
-            )
-
-        elif direction == "neutral":
-            status = "NO TRADE"
-            status_reason = "Current timeframe voting does not produce a directional majority."
-
-    latest_ts = get_latest_timestamp()
-    health, age_minutes = data_health(latest_ts)
-    news_warning, news_level = get_news_state()
-
-    return {
-        "price": current_price,
-        "trends": trends,
-        "direction": direction,
-        "alignment": alignment,
-        "supply": supply,
-        "demand": demand,
-        "best_supply": best_supply,
-        "best_demand": best_demand,
-        "near_supply": near_supply,
-        "near_demand": near_demand,
-        "trade": trade,
-        "status": status,
-        "status_reason": status_reason,
-        "latest_timestamp": latest_ts,
-        "data_health": health,
-        "data_age_minutes": age_minutes,
-        "news_warning": news_warning,
-        "news_level": news_level,
-    }
+    st.markdown(
+        f"""
+        <div class="tp-card{css_variant}">
+            <div class="tp-kicker">{title}</div>
+            <div class="tp-value">{money(lower)} - {money(upper)}</div>
+            <div class="tp-detail">
+                {timeframe} {zone_type} &nbsp;|&nbsp;
+                Grade {grade} &nbsp;|&nbsp;
+                Strength {strength:.0f}/100<br>
+                Width {points(width)} &nbsp;|&nbsp;
+                Distance {points(distance)} ({distance_pct:.3f}%)
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def zone_grade(zone):
-    if not zone:
-        return "—"
+# ---------------------------------------------------------------------
+# CHART
+# ---------------------------------------------------------------------
 
-    strength = safe_float(zone.get("strength"), 0) or 0
-
-    if strength >= 90:
-        return "A+"
-    if strength >= 80:
-        return "A"
-    if strength >= 65:
-        return "B"
-    if strength >= 50:
-        return "C"
-
-    return "D"
-
-
-def build_candlestick_chart(
-    df,
-    timeframe_label,
-    supply_zones=None,
-    demand_zones=None,
-    trade=None,
-):
-    """
-    Interactive Altair candlestick chart.
-
-    V2.1 uses Altair because it is already installed with Streamlit.
-    This replaces the static PNG chart from V1.
-    """
+def build_candlestick_chart(df, timeframe_label, state):
     if df is None or len(df) < 2:
         return None
 
     data = df.copy().tail(220).reset_index()
-
-    # Normalize timestamp column name.
     first_col = data.columns[0]
     if first_col != "timestamp":
         data = data.rename(columns={first_col: "timestamp"})
@@ -683,57 +729,59 @@ def build_candlestick_chart(
             data[col] = pd.to_numeric(data[col], errors="coerce")
 
     data = data.dropna(subset=["open", "high", "low", "close"])
-
     if len(data) < 2:
         return None
 
-    data["direction"] = np.where(
-        data["close"] >= data["open"],
-        "Up",
-        "Down",
-    )
+    data["direction"] = np.where(data["close"] >= data["open"], "Up", "Down")
 
     price_min = float(data["low"].min())
     price_max = float(data["high"].max())
-
     price_range = max(price_max - price_min, 1.0)
-    y_min = price_min - price_range * 0.04
-    y_max = price_max + price_range * 0.04
+    y_min = price_min - price_range * 0.045
+    y_max = price_max + price_range * 0.045
 
-    base = alt.Chart(data).encode(
-        x=alt.X(
-            "timestamp:T",
-            axis=alt.Axis(
-                title=None,
-                format="%m/%d %H:%M",
-                labelAngle=-35,
-                labelOverlap=True,
-            ),
-        )
+    x_encoding = alt.X(
+        "timestamp:T",
+        axis=alt.Axis(
+            title=None,
+            format="%m/%d %H:%M",
+            labelAngle=-35,
+            labelOverlap=True,
+            labelColor=MUTED,
+            tickColor=BORDER,
+            domainColor=BORDER,
+        ),
     )
 
-    wicks = base.mark_rule().encode(
-        y=alt.Y(
-            "low:Q",
-            scale=alt.Scale(domain=[y_min, y_max], zero=False),
-            axis=alt.Axis(title="Price"),
+    y_encoding = alt.Y(
+        "low:Q",
+        scale=alt.Scale(domain=[y_min, y_max], zero=False),
+        axis=alt.Axis(
+            title=None,
+            labelColor=MUTED,
+            tickColor=BORDER,
+            domainColor=BORDER,
+            format=",.2f",
         ),
+    )
+
+    color_scale = alt.Scale(
+        domain=["Up", "Down"],
+        range=[GREEN, RED],
+    )
+
+    base = alt.Chart(data).encode(x=x_encoding)
+
+    wicks = base.mark_rule(strokeWidth=1.1).encode(
+        y=y_encoding,
         y2="high:Q",
-        color=alt.Color(
-            "direction:N",
-            scale=alt.Scale(
-                domain=["Up", "Down"],
-                range=["#16a34a", "#dc2626"],
-            ),
-            legend=None,
-        ),
+        color=alt.Color("direction:N", scale=color_scale, legend=None),
         tooltip=[
             alt.Tooltip("timestamp:T", title="Time"),
             alt.Tooltip("open:Q", title="Open", format=",.2f"),
             alt.Tooltip("high:Q", title="High", format=",.2f"),
             alt.Tooltip("low:Q", title="Low", format=",.2f"),
             alt.Tooltip("close:Q", title="Close", format=",.2f"),
-            alt.Tooltip("volume:Q", title="Volume", format=",.0f"),
         ],
     )
 
@@ -741,94 +789,92 @@ def build_candlestick_chart(
         y=alt.Y(
             "open:Q",
             scale=alt.Scale(domain=[y_min, y_max], zero=False),
+            axis=None,
         ),
         y2="close:Q",
-        color=alt.Color(
-            "direction:N",
-            scale=alt.Scale(
-                domain=["Up", "Down"],
-                range=["#16a34a", "#dc2626"],
-            ),
-            legend=None,
-        ),
+        color=alt.Color("direction:N", scale=color_scale, legend=None),
         tooltip=[
             alt.Tooltip("timestamp:T", title="Time"),
             alt.Tooltip("open:Q", title="Open", format=",.2f"),
             alt.Tooltip("high:Q", title="High", format=",.2f"),
             alt.Tooltip("low:Q", title="Low", format=",.2f"),
             alt.Tooltip("close:Q", title="Close", format=",.2f"),
-            alt.Tooltip("volume:Q", title="Volume", format=",.0f"),
         ],
     )
 
     chart = wicks + bodies
 
-    # Only show the most relevant zones to avoid clutter.
+    context_zone = zone_dict(get_context_zone(state))
+    execution_zone = zone_dict(get_execution_zone(state))
+    conflict_zone = zone_dict(get_conflict_zone(state))
     zone_rows = []
 
-    if supply_zones:
-        for zone in supply_zones[:3]:
-            zone_rows.append(
-                {
-                    "lower": float(zone["lower_bound"]),
-                    "upper": float(zone["upper_bound"]),
-                    "zone_type": "Supply",
-                }
-            )
+    if context_zone and timeframe_label in ("1D", "4H", "1H"):
+        zone_rows.append(
+            {
+                "lower": float(context_zone["lower_bound"]),
+                "upper": float(context_zone["upper_bound"]),
+                "zone_role": "HTF Context",
+            }
+        )
 
-    if demand_zones:
-        for zone in demand_zones[:3]:
-            zone_rows.append(
-                {
-                    "lower": float(zone["lower_bound"]),
-                    "upper": float(zone["upper_bound"]),
-                    "zone_type": "Demand",
-                }
-            )
+    if execution_zone and timeframe_label in ("1H", "30m", "15m", "5m", "1m"):
+        zone_rows.append(
+            {
+                "lower": float(execution_zone["lower_bound"]),
+                "upper": float(execution_zone["upper_bound"]),
+                "zone_role": "Execution",
+            }
+        )
+
+    if conflict_zone and timeframe_label in ("1H", "30m", "15m", "5m", "1m"):
+        zone_rows.append(
+            {
+                "lower": float(conflict_zone["lower_bound"]),
+                "upper": float(conflict_zone["upper_bound"]),
+                "zone_role": "Conflict",
+            }
+        )
 
     if zone_rows:
         zone_df = pd.DataFrame(zone_rows)
-
         zone_layer = (
             alt.Chart(zone_df)
-            .mark_rect(opacity=0.10)
+            .mark_rect(opacity=0.105)
             .encode(
                 y=alt.Y(
                     "lower:Q",
                     scale=alt.Scale(domain=[y_min, y_max], zero=False),
+                    axis=None,
                 ),
                 y2="upper:Q",
                 color=alt.Color(
-                    "zone_type:N",
+                    "zone_role:N",
                     scale=alt.Scale(
-                        domain=["Supply", "Demand"],
-                        range=["#dc2626", "#16a34a"],
+                        domain=["HTF Context", "Execution", "Conflict"],
+                        range=[ACCENT, GREEN, RED],
                     ),
                     legend=alt.Legend(
-                        title="Zones",
+                        title=None,
                         orient="top",
+                        labelColor=MUTED,
                     ),
                 ),
+                tooltip=[
+                    alt.Tooltip("zone_role:N", title="Role"),
+                    alt.Tooltip("lower:Q", title="Low", format=",.2f"),
+                    alt.Tooltip("upper:Q", title="High", format=",.2f"),
+                ],
             )
         )
-
         chart = chart + zone_layer
 
-    # Current price line.
-    last_price = safe_float(data["close"].iloc[-1])
-
-    if last_price is not None:
-        current_price_df = pd.DataFrame(
-            {
-                "price": [last_price],
-                "label": [f"Current {last_price:,.2f}"],
-            }
-        )
-
+    if state.current_price is not None:
+        current_df = pd.DataFrame({"price": [state.current_price]})
         current_line = (
-            alt.Chart(current_price_df)
+            alt.Chart(current_df)
             .mark_rule(
-                color="#2563eb",
+                color=ACCENT_SOFT,
                 strokeDash=[5, 4],
                 strokeWidth=1.2,
             )
@@ -836,520 +882,327 @@ def build_candlestick_chart(
                 y=alt.Y(
                     "price:Q",
                     scale=alt.Scale(domain=[y_min, y_max], zero=False),
+                    axis=None,
                 )
             )
         )
-
         chart = chart + current_line
 
-    # Existing V1 trade plan.
-    if trade:
-        trade_levels = []
-
-        if trade.get("entry") is not None:
-            trade_levels.append(
-                {
-                    "price": float(trade["entry"]),
-                    "label": f"{trade['direction']} ENTRY",
-                    "level_type": "Entry",
-                }
-            )
-
-        if trade.get("stop") is not None:
-            trade_levels.append(
-                {
-                    "price": float(trade["stop"]),
-                    "label": "STOP",
-                    "level_type": "Stop",
-                }
-            )
-
-        if trade.get("target_1") is not None:
-            trade_levels.append(
-                {
-                    "price": float(trade["target_1"]),
-                    "label": "TARGET",
-                    "level_type": "Target",
-                }
-            )
-
-        if trade_levels:
-            levels_df = pd.DataFrame(trade_levels)
-
-            trade_lines = (
-                alt.Chart(levels_df)
-                .mark_rule(strokeWidth=1.8)
-                .encode(
-                    y=alt.Y(
-                        "price:Q",
-                        scale=alt.Scale(domain=[y_min, y_max], zero=False),
-                    ),
-                    color=alt.Color(
-                        "level_type:N",
-                        scale=alt.Scale(
-                            domain=["Entry", "Stop", "Target"],
-                            range=["#2563eb", "#dc2626", "#16a34a"],
-                        ),
-                        legend=alt.Legend(
-                            title="Trade",
-                            orient="top",
-                        ),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("label:N", title="Level"),
-                        alt.Tooltip("price:Q", title="Price", format=",.2f"),
-                    ],
-                )
-            )
-
-            chart = chart + trade_lines
-
-    chart = (
+    return (
         chart.properties(
-            height=570,
-            title=f"{DISPLAY_SYMBOL} • {MARKET_NAME} • {timeframe_label}",
+            height=560,
+            background=PANEL,
+            title=f"{DISPLAY_SYMBOL} / {MARKET_NAME} / {timeframe_label}",
         )
         .interactive()
         .configure_view(strokeOpacity=0)
         .configure_axis(
-            gridColor="#888888",
-            gridOpacity=0.10,
+            gridColor="#2a3240",
+            gridOpacity=0.20,
+            labelFontSize=11,
         )
         .configure_title(
             anchor="start",
-            fontSize=16,
+            fontSize=14,
+            fontWeight=700,
+            color="#d9dee7",
+            offset=12,
         )
     )
 
-    return chart
+
+# ---------------------------------------------------------------------
+# SETUP / PROFESSOR
+# ---------------------------------------------------------------------
+
+def setup_checks(state):
+    c = state.confirmation
+    return [
+        (
+            state.market_bias in ("bullish", "bearish"),
+            f"Directional bias: {state.market_bias.upper()}",
+        ),
+        (
+            state.selected_zone is not None,
+            "Execution zone selected",
+        ),
+        (
+            bool(c.price_in_zone),
+            "Price inside execution zone",
+        ),
+        (
+            bool(c.lower_timeframe_confirmed),
+            "Lower-timeframe confirmation",
+        ),
+        (
+            bool(c.structural_trigger),
+            "Structural trigger",
+        ),
+        (
+            bool(c.risk_validated),
+            "Risk validation",
+        ),
+    ]
 
 
-def get_relevant_chart_zones(snapshot, chart_price):
-    """
-    Pick a few relevant zones for the chart rather than drawing every
-    historical zone.
-    """
-    supply = snapshot.get("supply", [])
-    demand = snapshot.get("demand", [])
+def render_setup_validation(state):
+    checks = setup_checks(state)
+    completed = sum(1 for done, _ in checks if done)
 
-    supply_candidates = []
-    for z in supply:
-        if chart_price is None:
-            continue
-        if float(z["upper_bound"]) >= chart_price:
-            supply_candidates.append(z)
+    st.progress(completed / len(checks))
+    st.caption(f"{completed}/{len(checks)} deterministic conditions validated")
 
-    demand_candidates = []
-    for z in demand:
-        if chart_price is None:
-            continue
-        if float(z["lower_bound"]) <= chart_price:
-            demand_candidates.append(z)
+    for done, label in checks:
+        prefix = "[PASS]" if done else "[WAIT]"
+        st.markdown(f"**{prefix}** {label}")
 
-    supply_candidates = sorted(
-        supply_candidates,
-        key=lambda z: distance_to_zone(chart_price, z),
-    )[:3]
-
-    demand_candidates = sorted(
-        demand_candidates,
-        key=lambda z: distance_to_zone(chart_price, z),
-    )[:3]
-
-    return supply_candidates, demand_candidates
+    if get_conflict_zone(state):
+        st.error("CONFLICT: opposing tactical zone is active.")
 
 
-def render_zone_card(title, zone, price, zone_type):
-    if not zone:
+def render_watch_plan(state):
+    execution = zone_dict(get_execution_zone(state))
+    conflict = zone_dict(get_conflict_zone(state))
+
+    direction = state.setup_direction or "NONE"
+    if direction == "LONG":
+        st.success(f"Directional watch: {direction}")
+    elif direction == "SHORT":
+        st.error(f"Directional watch: {direction}")
+    else:
+        st.info("No directional setup currently selected.")
+
+    if execution:
         st.markdown(
-            f"""
-            <div class="tp-panel">
-                <div class="tp-zone-title">{title}</div>
-                <div class="tp-small">No qualifying {zone_type.lower()} zone found.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+            f"**Execution:** {execution.get('timeframe', '--')} "
+            f"{str(execution.get('type', '')).upper()} "
+            f"{money(execution.get('lower_bound'))} - "
+            f"{money(execution.get('upper_bound'))}"
         )
-        return
+        st.caption(
+            f"Distance: {points(execution.get('distance_points'))} "
+            f"({safe_float(execution.get('distance_percent'), 0):.3f}%)"
+        )
 
-    lower = float(zone["lower_bound"])
-    upper = float(zone["upper_bound"])
-    strength = safe_float(zone.get("strength"), 0) or 0
-    distance = distance_to_zone(price, zone)
-    distance_pct = distance_pct_to_zone(price, zone)
+    if conflict:
+        st.warning(
+            f"Opposing {conflict.get('timeframe', '--')} "
+            f"{str(conflict.get('type', '')).upper()} "
+            f"{money(conflict.get('lower_bound'))} - "
+            f"{money(conflict.get('upper_bound'))}"
+        )
+
+    missing = getattr(state.confirmation, "missing_conditions", None) or []
+    if missing:
+        st.markdown("**Still required**")
+        for item in missing:
+            st.write(f"- {item}")
+
+    if not state.is_actionable:
+        st.info(
+            "No validated trade yet. Entry, stop, targets, and probability "
+            "remain intentionally blank."
+        )
+
+
+def render_professor_bridge(state):
+    status = "READY" if state.professor_ready else "WAITING"
+    context = state.professor_context or {}
+    architecture_version = context.get("architecture_version", "--")
 
     st.markdown(
         f"""
-        <div class="tp-panel">
-            <div class="tp-zone-title">{title}</div>
-            <div style="font-size:1.08rem;font-weight:750;">
-                {money(lower)} – {money(upper)}
+        <div class="tp-professor">
+            <div class="tp-section-label">SAME BRAIN. SAME MARKETSTATE.</div>
+            <div class="tp-prof-title">AI Professor Bridge / {status}</div>
+            <div class="tp-prof-copy">
+                The Professor receives the exact canonical market snapshot shown
+                on this screen. It does not independently invent market conditions,
+                trade levels, or probability.
             </div>
-            <div class="tp-small">
-                Grade {zone_grade(zone)} • Strength {strength:.0f}/100
-                • Distance {points(distance)}
-                ({pct(distance_pct)})
+            <div class="tp-rule">
+                Architecture V{architecture_version} / Symbol {state.root_symbol}
+            </div>
+            <div class="tp-rule">
+                AI-generated trade values:
+                {context.get('trade_values_generated_by_ai', False)}
+            </div>
+            <div class="tp-rule">
+                Current setup: {state.setup_state} /
+                {state.setup_direction or 'NO DIRECTION'}
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-
-def render_setup_checklist(snapshot):
-    """
-    V2.1 checklist based only on information the CURRENT engines
-    can actually prove.
-
-    We intentionally do not mark future V2 confirmation rules as
-    complete because those engines do not exist yet.
-    """
-    direction = snapshot["direction"]
-    alignment = snapshot["alignment"]
-    price = snapshot["price"]
-
-    if direction == "bullish":
-        watch_zone = snapshot["best_demand"]
-        zone_name = "Qualified 1H demand identified"
-        price_condition = bool(snapshot["near_demand"])
-    elif direction == "bearish":
-        watch_zone = snapshot["best_supply"]
-        zone_name = "Qualified 1H supply identified"
-        price_condition = bool(snapshot["near_supply"])
-    else:
-        watch_zone = None
-        zone_name = "Directional watch zone identified"
-        price_condition = False
-
-    checks = [
-        (
-            alignment >= 60,
-            f"Multi-timeframe alignment ≥ 60% ({alignment:.0f}%)",
-        ),
-        (
-            direction in ("bullish", "bearish"),
-            f"Directional bias identified ({direction.upper()})",
-        ),
-        (
-            watch_zone is not None,
-            zone_name,
-        ),
-        (
-            price_condition,
-            "Price is near the qualifying zone",
-        ),
-        (
-            False,
-            "V2 lower-timeframe confirmation",
-        ),
-        (
-            False,
-            "V2 structural entry trigger",
-        ),
-        (
-            False,
-            "V2 risk rules validated",
-        ),
-    ]
-
-    completed = sum(1 for done, _ in checks if done)
-
-    st.progress(completed / len(checks))
+    st.text_input(
+        "Ask the Professor about this market",
+        placeholder="Example: Why are we watching instead of entering?",
+        disabled=True,
+        key="professor_question",
+    )
+    with st.expander("Professor decision packet"):
+        st.json(state.professor_payload(), expanded=False)
     st.caption(
-        f"{completed}/{len(checks)} current/future setup conditions satisfied"
+        "The conversation layer is next. V2.5 now exposes the exact deterministic "
+        "confirmation, risk, and trade-plan state the Professor will explain."
     )
-
-    for done, label in checks:
-        icon = "✅" if done else "⬜"
-        st.write(f"{icon} {label}")
-
-
-def render_trade_plan(snapshot):
-    trade = snapshot["trade"]
-
-    if not trade:
-        st.markdown("### No confirmed V2 trade")
-
-        if snapshot["direction"] == "bullish" and snapshot["best_demand"]:
-            zone = snapshot["best_demand"]
-            st.write(
-                "Current plan: **watch for a LONG opportunity** if price "
-                "returns to the selected demand zone."
-            )
-            st.metric(
-                "Demand to Watch",
-                f"{money(zone['lower_bound'])} – {money(zone['upper_bound'])}",
-            )
-            st.metric(
-                "Distance",
-                points(distance_to_zone(snapshot["price"], zone)),
-            )
-
-        elif snapshot["direction"] == "bearish" and snapshot["best_supply"]:
-            zone = snapshot["best_supply"]
-            st.write(
-                "Current plan: **watch for a SHORT opportunity** if price "
-                "returns to the selected supply zone."
-            )
-            st.metric(
-                "Supply to Watch",
-                f"{money(zone['lower_bound'])} – {money(zone['upper_bound'])}",
-            )
-            st.metric(
-                "Distance",
-                points(distance_to_zone(snapshot["price"], zone)),
-            )
-
-        else:
-            st.write(
-                "The current engines do not identify a directional trade "
-                "location worth presenting."
-            )
-
-        st.info(
-            "Entry, Stop, T1/T2/T3 and contract-dollar risk will become "
-            "authoritative after the V2 setup and risk engines are built."
-        )
-
-        return
-
-    direction = trade["direction"]
-
-    if direction == "LONG":
-        st.success(f"Existing V1 LONG signal • Grade {trade['grade']}")
-    else:
-        st.error(f"Existing V1 SHORT signal • Grade {trade['grade']}")
-
-    c1, c2 = st.columns(2)
-    c1.metric("Entry", money(trade["entry"]))
-    c2.metric("Stop", money(trade["stop"]))
-
-    c3, c4 = st.columns(2)
-    c3.metric("Current Target", money(trade["target_1"]))
-    c4.metric(
-        "Current R:R",
-        f"{trade['rr']:.1f}:1" if trade["rr"] else "—",
-    )
-
-    risk_points = None
-    if trade["entry"] is not None and trade["stop"] is not None:
-        risk_points = abs(trade["entry"] - trade["stop"])
-
-    st.metric("Risk Distance", points(risk_points))
-
-    st.warning(
-        "This is still the existing V1 trade calculation. "
-        "T1/T2/T3, structural stops, contract-dollar risk and historical "
-        "probability will replace this logic in later V2 milestones."
-    )
-
-    if st.button(
-        f"Log current {direction} signal",
-        use_container_width=True,
-        key="v2_log_trade",
-    ):
-        tid, tags = log_trade_with_dna(
-            direction,
-            trade["entry"],
-            trade["stop"],
-            trade["target_1"],
-            trade["rr"],
-            trade["grade"],
-            trade["alignment"],
-            trade["zone_type"],
-            trade["timeframe"],
-        )
-        st.success(
-            f"Trade #{tid} logged. Tags: {', '.join(tags)}"
-        )
 
 
 # ---------------------------------------------------------------------
-# SESSION STATE
+# SESSION / MARKETSTATE
 # ---------------------------------------------------------------------
 
 if "chart_tf" not in st.session_state:
     st.session_state.chart_tf = DEFAULT_CHART_TF
 
-
-# ---------------------------------------------------------------------
-# BUILD SNAPSHOT
-# ---------------------------------------------------------------------
-
-with st.spinner("Loading Gold market snapshot..."):
+with st.spinner("Building canonical GC MarketState..."):
     try:
-        snapshot = build_current_snapshot()
+        market_state = get_market_state()
     except Exception as exc:
-        st.error(f"Unable to build market snapshot: {exc}")
+        st.error(f"Unable to build MarketState: {exc}")
         st.stop()
+
+health, age_minutes = data_health(market_state.market_timestamp)
+news_warning, news_level = get_news_state()
 
 
 # ---------------------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------------------
 
-header_left, header_right = st.columns([5.2, 1.8])
+st.markdown('<div class="tp-topline"></div>', unsafe_allow_html=True)
+
+header_left, header_right = st.columns([5.2, 2.2], gap="large")
 
 with header_left:
-    st.markdown(
-        f"""
-        <div class="tp-eyebrow">{APP_NAME.upper()}</div>
-        <div class="tp-title">🥇 {COACH_NAME}</div>
-        <div class="tp-subtitle">
-            {DISPLAY_SYMBOL} • {MARKET_NAME} • Data: {get_data_source_name()}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    logo_col, copy_col = st.columns([1.7, 3.8], gap="medium")
+    with logo_col:
+        st.image("assets/ttp_logo.webp", use_container_width=True)
+    with copy_col:
+        st.markdown(
+            f"""
+            <div class="tp-hero">
+                <div class="tp-hero-tag">AI ASSISTED FUTURES TRADING</div>
+                <div class="tp-title">{COACH_NAME}</div>
+                <div class="tp-hero-copy">
+                    Stop Chasing Trades. Let the Market Come to You.<br>
+                    <span style="color:#b3bdcb">
+                    {DISPLAY_SYMBOL} / {MARKET_NAME} / FRONT-MONTH ARCHITECTURE /
+                    DATA: {get_data_source_name()}
+                    </span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 with header_right:
     h1, h2 = st.columns(2)
+    h1.metric("GC PRICE", money(market_state.current_price))
+    h2.metric("DATA FEED", health)
 
-    h1.metric(
-        "Gold Price",
-        money(snapshot["price"]),
-    )
-
-    health = snapshot["data_health"]
-
-    if health == "CONNECTED":
-        health_display = "🟢 CONNECTED"
-    elif health == "STALE":
-        health_display = "🟠 STALE"
-    else:
-        health_display = "🔴 DISCONNECTED"
-
-    h2.metric(
-        "Data",
-        health_display,
-    )
-
-if snapshot["latest_timestamp"] is not None:
-    local_ts = snapshot["latest_timestamp"]
-
+if market_state.market_timestamp:
     try:
+        local_ts = pd.Timestamp(market_state.market_timestamp)
+        if local_ts.tzinfo is None:
+            local_ts = local_ts.tz_localize("UTC")
         local_ts = local_ts.tz_convert("America/Los_Angeles")
+        st.caption(
+            "MarketState candle: "
+            f"{local_ts.strftime('%Y-%m-%d %H:%M:%S %Z')} / "
+            "Yahoo futures data may be delayed."
+        )
     except Exception:
-        pass
-
-    st.caption(
-        f"Latest stored candle: "
-        f"{local_ts.strftime('%Y-%m-%d %H:%M:%S %Z')} "
-        f"• Yahoo data may be delayed."
-    )
-else:
-    st.caption("No stored candle timestamp available.")
+        st.caption(f"MarketState timestamp: {market_state.market_timestamp}")
 
 
 # ---------------------------------------------------------------------
-# TOP ACTION BAR
+# CONTROL STRIP
 # ---------------------------------------------------------------------
 
-action_left, action_mid, action_right = st.columns([1.2, 4.8, 1.2])
+control_left, control_mid, control_right = st.columns([1.2, 4.8, 1.25], gap="medium")
 
-with action_left:
-    if st.button(
-        "🔄 Refresh Market Data",
-        use_container_width=True,
-        type="primary",
-    ):
-        with st.spinner("Refreshing GC=F market data..."):
+with control_left:
+    if st.button("REFRESH MARKET", use_container_width=True, type="primary"):
+        with st.spinner("Refreshing Gold futures data..."):
             success = fetch_latest_data()
-
         st.cache_data.clear()
-
-        if success:
-            st.success("Market data refreshed.")
-        else:
+        st.cache_resource.clear()
+        if not success:
             st.error("Market-data refresh failed.")
-
         st.rerun()
 
-with action_mid:
-    news_level = snapshot["news_level"]
-    news_warning = snapshot["news_warning"]
-
+with control_mid:
     if news_level == "HIGH":
-        st.error(f"🔴 Event Risk: {news_warning}")
+        st.error(f"HIGH EVENT RISK: {news_warning}")
     elif news_level == "MEDIUM":
-        st.warning(f"🟠 Event Risk: {news_warning}")
+        st.warning(f"EVENT RISK: {news_warning}")
     elif news_level == "UNKNOWN":
         st.info("Economic-event status unavailable.")
     else:
-        st.success("🟢 No major event warning from the current news engine.")
+        st.success("No major event warning from the current news engine.")
 
-with action_right:
+with control_right:
+    age_text = "--" if age_minutes is None else f"{age_minutes:.0f}m"
     st.caption(
-        f"Dashboard refreshed\n{datetime.now().strftime('%H:%M:%S')}"
+        f"DATA AGE {age_text}\n\n"
+        f"UI {datetime.now().strftime('%H:%M:%S')}"
     )
 
 
 # ---------------------------------------------------------------------
-# MARKET STATUS
+# COMMAND CENTER
 # ---------------------------------------------------------------------
 
 st.divider()
+render_section("LIVE DECISION ENGINE", "Market Command Center")
 
 m1, m2, m3, m4, m5 = st.columns(5)
 
-bias_text = snapshot["direction"].upper()
-status_text = snapshot["status"]
+m1.metric("MARKET BIAS", market_state.market_bias.upper())
+m2.metric("ALIGNMENT", f"{market_state.alignment_score:.1f}%")
+m3.metric("SETUP STATE", market_state.setup_state)
+m4.metric("DIRECTION", market_state.setup_direction or "--")
+m5.metric("TRADE READY", "YES" if market_state.is_actionable else "NO")
 
-m1.metric("Market Bias", bias_text)
-m2.metric("Alignment", f"{snapshot['alignment']:.0f}%")
-m3.metric("Trade Status", status_text)
-
-if snapshot["trade"]:
-    m4.metric("Setup Grade", snapshot["trade"]["grade"])
-else:
-    m4.metric("Setup Grade", "—")
-
-# Do NOT invent probability.
-m5.metric("Historical Probability", "—")
-m5.caption("Backtest-derived probability coming in V2")
-
-st.caption(snapshot["status_reason"])
+st.caption(
+    "Alignment is weighted directional agreement across timeframes. "
+    "It is not win probability."
+)
 
 
 # ---------------------------------------------------------------------
-# MAIN TABS
+# TABS
 # ---------------------------------------------------------------------
 
 dashboard_tab, journal_tab, stats_tab, backtest_tab, system_tab = st.tabs(
     [
-        "📊 Dashboard",
-        "📝 Journal",
-        "📈 Stats",
-        "🧪 Backtest",
-        "⚙️ System",
+        "COMMAND CENTER",
+        "JOURNAL",
+        "PERFORMANCE",
+        "BACKTEST",
+        "SYSTEM",
     ]
 )
 
 
-# =====================================================================
-# DASHBOARD TAB
-# =====================================================================
+# ---------------------------------------------------------------------
+# COMMAND CENTER TAB
+# ---------------------------------------------------------------------
 
 with dashboard_tab:
-
-    # -------------------------------------------------------------
-    # TIMEFRAME SELECTOR
-    # -------------------------------------------------------------
-
-    st.markdown(
-        '<div class="tp-section">Live Market Chart</div>',
-        unsafe_allow_html=True,
-    )
+    st.write("")
+    render_section("PRICE ACTION", "Live Market")
 
     tf_cols = st.columns(len(CHART_TIMEFRAMES))
-
     for index, display_tf in enumerate(CHART_TIMEFRAMES.keys()):
         button_type = (
             "primary"
             if st.session_state.chart_tf == display_tf
             else "secondary"
         )
-
         if tf_cols[index].button(
             display_tf,
             use_container_width=True,
@@ -1359,282 +1212,227 @@ with dashboard_tab:
             st.session_state.chart_tf = display_tf
             st.rerun()
 
-    # -------------------------------------------------------------
-    # CHART + RIGHT PANEL
-    # -------------------------------------------------------------
-
-    chart_col, side_col = st.columns([3.35, 1.15], gap="large")
+    chart_col, side_col = st.columns([3.45, 1.15], gap="large")
 
     with chart_col:
         selected_tf = st.session_state.chart_tf
-
         try:
-            chart_df = get_chart_data(selected_tf, 240)
-
+            chart_df = get_chart_data(selected_tf, 260)
             if chart_df is not None and len(chart_df) >= 5:
-                chart_price = safe_float(chart_df["close"].iloc[-1])
-
-                chart_supply, chart_demand = get_relevant_chart_zones(
-                    snapshot,
-                    chart_price,
-                )
-
                 chart = build_candlestick_chart(
                     chart_df,
                     selected_tf,
-                    supply_zones=chart_supply,
-                    demand_zones=chart_demand,
-                    trade=snapshot["trade"],
+                    market_state,
                 )
-
                 if chart is not None:
-                    st.altair_chart(
-                        chart,
-                        use_container_width=True,
-                    )
-                else:
-                    st.warning(
-                        "Chart data loaded but could not be rendered."
-                    )
+                    st.altair_chart(chart, use_container_width=True)
 
-                first_ts = pd.Timestamp(chart_df.index[0])
-                last_ts = pd.Timestamp(chart_df.index[-1])
-
+                last_candle = chart_df.iloc[-1]
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric(
-                    "Chart Open",
-                    money(chart_df["open"].iloc[-1]),
-                )
-                c2.metric(
-                    "Chart High",
-                    money(chart_df["high"].iloc[-1]),
-                )
-                c3.metric(
-                    "Chart Low",
-                    money(chart_df["low"].iloc[-1]),
-                )
-                c4.metric(
-                    "Chart Close",
-                    money(chart_df["close"].iloc[-1]),
-                )
+                c1.metric("OPEN", money(last_candle["open"]))
+                c2.metric("HIGH", money(last_candle["high"]))
+                c3.metric("LOW", money(last_candle["low"]))
+                c4.metric("CLOSE", money(last_candle["close"]))
 
-                st.caption(
-                    f"{len(chart_df):,} candles loaded • "
-                    f"{first_ts} → {last_ts}"
+                note = (
+                    f"{len(chart_df):,} candles / "
+                    "only decision-useful MarketState zones are overlaid"
                 )
-
                 if selected_tf == "30m":
-                    st.caption(
-                        "30m candles are temporarily resampled from stored "
-                        "15m data in V2.1."
-                    )
-
+                    note += " / 30m currently resampled from 15m"
+                st.caption(note)
             else:
-                st.warning(
-                    f"Not enough {selected_tf} data is currently stored."
-                )
-
+                st.warning(f"Not enough {selected_tf} data.")
         except Exception as exc:
             st.error(f"Chart error: {exc}")
 
     with side_col:
-        st.markdown("### Current Plan")
+        render_section("NOW", "MarketState")
 
-        if snapshot["status"] == "TRADE AVAILABLE":
-            if snapshot["trade"]["direction"] == "LONG":
-                st.success("🟢 LONG AVAILABLE")
-            else:
-                st.error("🔴 SHORT AVAILABLE")
+        state_variant = "gold"
+        if market_state.is_actionable:
+            state_variant = "green"
+        elif get_conflict_zone(market_state):
+            state_variant = "red"
 
-        elif snapshot["status"] == "WATCHING LONG":
-            st.info("🟢 WATCHING LONG")
+        st.markdown(
+            f"""
+            <div class="tp-card {state_variant}">
+                <div class="tp-kicker">SETUP STATUS</div>
+                <div class="tp-value gold">{market_state.setup_state}</div>
+                <div class="tp-detail">
+                    Bias {market_state.market_bias.upper()}<br>
+                    Alignment {market_state.alignment_score:.1f}%<br>
+                    Direction {market_state.setup_direction or 'NONE'}<br>
+                    Trade ready {'YES' if market_state.is_actionable else 'NO'}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        elif snapshot["status"] == "WATCHING SHORT":
-            st.info("🔴 WATCHING SHORT")
+        st.write("")
+        render_zone_card(
+            "EXECUTION ZONE",
+            get_execution_zone(market_state),
+            "Execution",
+            "gold",
+        )
 
-        else:
-            st.warning("⚪ NO TRADE")
-
-        st.write(snapshot["status_reason"])
-
-        st.divider()
-
-        if snapshot["direction"] == "bullish":
+        if get_conflict_zone(market_state):
+            st.write("")
             render_zone_card(
-                "Primary Zone to Watch",
-                snapshot["best_demand"],
-                snapshot["price"],
-                "Demand",
+                "ACTIVE CONFLICT",
+                get_conflict_zone(market_state),
+                "Conflict",
+                "red",
             )
 
-        elif snapshot["direction"] == "bearish":
-            render_zone_card(
-                "Primary Zone to Watch",
-                snapshot["best_supply"],
-                snapshot["price"],
-                "Supply",
-            )
-
-        else:
-            render_zone_card(
-                "Nearest Demand",
-                snapshot["best_demand"],
-                snapshot["price"],
-                "Demand",
-            )
-
-        st.markdown("### Probability")
-        st.metric("Historical Win Probability", "—")
+        st.write("")
+        st.metric("HISTORICAL WIN PROBABILITY", "--")
         st.caption(
-            "Not calculated yet. V2 will derive this from comparable "
-            "historical setups and display sample size."
+            "Not fabricated. Requires comparable historical setups and "
+            "a valid sample size."
         )
-
-    # -------------------------------------------------------------
-    # WATCH ZONES
-    # -------------------------------------------------------------
 
     st.divider()
-    st.markdown(
-        '<div class="tp-section">Zones to Watch</div>',
-        unsafe_allow_html=True,
-    )
+    render_section("LOCATION MATTERS", "Decision Zones")
 
-    demand_col, supply_col = st.columns(2, gap="large")
-
-    with demand_col:
+    z1, z2, z3 = st.columns(3, gap="large")
+    with z1:
         render_zone_card(
-            "🟢 Best Demand",
-            snapshot["best_demand"],
-            snapshot["price"],
-            "Demand",
+            "HIGHER-TIMEFRAME CONTEXT",
+            get_context_zone(market_state),
+            "Context",
         )
-
-        if snapshot["best_demand"]:
-            st.caption(
-                "Current V2.1 selection: closest detected 1H demand "
-                "at/below current price, with strength used as a tie-breaker."
-            )
-
-    with supply_col:
+    with z2:
         render_zone_card(
-            "🔴 Best Supply",
-            snapshot["best_supply"],
-            snapshot["price"],
-            "Supply",
+            "TACTICAL EXECUTION",
+            get_execution_zone(market_state),
+            "Execution",
+            "gold",
         )
-
-        if snapshot["best_supply"]:
-            st.caption(
-                "Current V2.1 selection: closest detected 1H supply "
-                "at/above current price, with strength used as a tie-breaker."
-            )
-
-    # -------------------------------------------------------------
-    # MARKET STRUCTURE / TIMEFRAME VOTING
-    # -------------------------------------------------------------
+    with z3:
+        render_zone_card(
+            "OPPOSING CONFLICT",
+            get_conflict_zone(market_state),
+            "Conflict",
+            "red" if get_conflict_zone(market_state) else "",
+        )
 
     st.divider()
-    st.markdown(
-        '<div class="tp-section">Multi-Timeframe Market Context</div>',
-        unsafe_allow_html=True,
-    )
+    render_section("TOP DOWN", "Multi-Timeframe Alignment")
 
     trend_cols = st.columns(len(TREND_DISPLAY_ORDER))
-
     for index, (label, key) in enumerate(TREND_DISPLAY_ORDER):
-        trend = snapshot["trends"].get(key, "no_data")
+        trend = market_state.trends.get(key, "no_data")
+        css_trend = trend if trend in ("bullish", "bearish", "neutral") else "neutral"
+        if trend == "bullish":
+            display_trend = "BULLISH"
+        elif trend == "bearish":
+            display_trend = "BEARISH"
+        elif trend == "neutral":
+            display_trend = "NEUTRAL"
+        else:
+            display_trend = "NO DATA"
 
-        trend_cols[index].metric(
-            label,
-            f"{trend_icon(trend)} {trend_label(trend)}",
+        trend_cols[index].markdown(
+            f"""
+            <div class="tp-trend-card {css_trend}">
+                <div class="tp-trend-tf">{label}</div>
+                <div class="tp-trend-value {css_trend}">{display_trend}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
     st.caption(
-        "V2.1 is displaying the existing trend engine's directional "
-        "classification. BOS/CHoCH and richer market-structure states "
-        "will be added in a later milestone."
+        "Monthly through 1-minute context feeds the canonical MarketState. "
+        "Higher timeframes define context; lower timeframes refine execution."
     )
 
-    # -------------------------------------------------------------
-    # SETUP CHECKLIST + TRADE PLAN
-    # -------------------------------------------------------------
-
     st.divider()
+    render_section("NO GUESSING", "Setup Validation")
 
-    checklist_col, plan_col = st.columns([1.15, 1], gap="large")
+    checklist_col, plan_col = st.columns([1.05, 1], gap="large")
 
     with checklist_col:
-        st.markdown(
-            '<div class="tp-section">Setup Checklist</div>',
-            unsafe_allow_html=True,
-        )
-        render_setup_checklist(snapshot)
+        render_setup_validation(market_state)
 
     with plan_col:
-        st.markdown(
-            '<div class="tp-section">Trade / Watch Plan</div>',
-            unsafe_allow_html=True,
-        )
-        render_trade_plan(snapshot)
+        render_watch_plan(market_state)
 
-    # -------------------------------------------------------------
-    # PROFESSOR PLACEHOLDER
-    # -------------------------------------------------------------
+    if market_state.trade is not None:
+        st.divider()
+        render_section("DETERMINISTIC EXECUTION", "Qualified Trade Plan")
+        trade = market_state.trade
+        t1, t2, t3, t4 = st.columns(4)
+        t1.metric("ENTRY", money(trade.entry))
+        t2.metric("STOP", money(trade.stop))
+        t3.metric("RISK / CONTRACT", money(trade.risk_dollars_per_contract))
+        t4.metric("SETUP GRADE", trade.setup_grade or "--")
+
+        if trade.targets:
+            target_cols = st.columns(len(trade.targets))
+            for idx, target in enumerate(trade.targets):
+                target_cols[idx].metric(
+                    target.name,
+                    money(target.price),
+                    f"{target.rr_ratio:.1f}R",
+                )
+        st.caption(
+            "Rule-generated only after all V2.5 confirmation and risk checks pass. "
+            "Historical win probability remains blank until statistically validated."
+        )
 
     st.divider()
+    render_section("THE PROFESSOR", "Market Intelligence Interface")
 
     professor_col, engine_col = st.columns([1.35, 1], gap="large")
 
     with professor_col:
-        st.markdown(
-            '<div class="tp-section">Professor</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.info(
-            "Professor integration is intentionally not connected in V2.1. "
-            "The final Professor will consume the same structured setup "
-            "data shown on this dashboard rather than inventing trade levels."
-        )
-
-        professor_prompt = st.text_input(
-            "Ask about the current market",
-            placeholder="Example: Why are we waiting for this zone?",
-            disabled=True,
-        )
-
-        st.caption(
-            "Coming milestone: What is Gold doing? • Why this zone? • "
-            "Why no trade? • What confirms entry? • Explain the stop/targets."
-        )
+        render_professor_bridge(market_state)
 
     with engine_col:
-        st.markdown(
-            '<div class="tp-section">Current Engine Status</div>',
-            unsafe_allow_html=True,
-        )
+        completed_stack = [
+            "Canonical MarketState",
+            "Monthly through 1m trend context",
+            "HTF context-zone hierarchy",
+            "Tactical execution zones",
+            "Zone-width penalty",
+            "Opposing-zone conflict detection",
+            "Setup lifecycle",
+            "Professor context bridge",
+        ]
+        next_stack = [
+            "Professor conversation layer",
+            "Comparable-setup probability",
+            "Multi-symbol storage migration",
+            "Multi-symbol futures scanner",
+            "Cross-market opportunity ranking",
+        ]
 
-        st.write("✅ Live/stored Gold market data")
-        st.write("✅ Multi-timeframe trend voting")
-        st.write("✅ Existing supply/demand detection")
-        st.write("✅ Interactive multi-timeframe chart")
-        st.write("✅ Basic watch-zone selection")
-        st.write("🟡 Existing V1 trade calculation")
-        st.write("⬜ V2 setup state machine")
-        st.write("⬜ Structural entry/stop engine")
-        st.write("⬜ T1 / T2 / T3 engine")
-        st.write("⬜ Contract-dollar risk engine")
-        st.write("⬜ Backtest-derived probability")
-        st.write("⬜ Professor integration")
+        st.markdown("**ACTIVE INTELLIGENCE**")
+        for item in completed_stack:
+            st.write(f"[LIVE] {item}")
+
+        st.markdown("**NEXT LAYERS**")
+        for item in next_stack:
+            st.write(f"[NEXT] {item}")
 
 
-# =====================================================================
+# ---------------------------------------------------------------------
 # JOURNAL TAB
-# =====================================================================
+# ---------------------------------------------------------------------
 
 with journal_tab:
-    st.subheader("Trade Journal")
+    st.write("")
+    render_section("TRADE MEMORY", "Journal")
+
+    st.caption(
+        "Existing journal preserved while deterministic V2 execution logic "
+        "continues to be developed."
+    )
 
     try:
         trades_df = get_all_trades()
@@ -1642,65 +1440,35 @@ with journal_tab:
         if len(trades_df) > 0:
             for _, trade_row in trades_df.head(30).iterrows():
                 outcome = str(trade_row["outcome"])
-
-                if outcome == "WIN":
-                    emoji = "🟢"
-                elif outcome == "LOSS":
-                    emoji = "🔴"
-                elif outcome == "BREAKEVEN":
-                    emoji = "⚪"
-                else:
-                    emoji = "🟡"
-
                 title = (
-                    f"{emoji} #{trade_row['id']}: "
-                    f"{trade_row['direction']} @ "
-                    f"{money(trade_row['entry'])} | "
-                    f"Grade {trade_row['grade']} | {outcome}"
+                    f"#{trade_row['id']} / {trade_row['direction']} "
+                    f"@ {money(trade_row['entry'])} / "
+                    f"Grade {trade_row['grade']} / {outcome}"
                 )
 
                 with st.expander(title):
                     c1, c2 = st.columns(2)
 
                     with c1:
-                        st.write(
-                            f"Entry: {money(trade_row['entry'])}"
-                        )
-                        st.write(
-                            f"Stop: {money(trade_row['stop'])}"
-                        )
-                        st.write(
-                            f"Target: {money(trade_row['target'])}"
-                        )
+                        st.write(f"Entry: {money(trade_row['entry'])}")
+                        st.write(f"Stop: {money(trade_row['stop'])}")
+                        st.write(f"Target: {money(trade_row['target'])}")
 
                     with c2:
                         st.write(f"Outcome: {outcome}")
 
-                        if (
-                            trade_row["exit_price"]
-                            and str(trade_row["exit_price"]) != "nan"
-                        ):
-                            st.write(
-                                f"Exit: {money(trade_row['exit_price'])}"
-                            )
+                        exit_value = trade_row["exit_price"]
+                        if exit_value is not None and str(exit_value) != "nan":
+                            st.write(f"Exit: {money(exit_value)}")
 
-                        if (
-                            trade_row["pnl"]
-                            and str(trade_row["pnl"]) != "nan"
-                        ):
-                            st.write(
-                                f"P&L: {money(trade_row['pnl'])}"
-                            )
+                        pnl_value = trade_row["pnl"]
+                        if pnl_value is not None and str(pnl_value) != "nan":
+                            st.write(f"P&L: {money(pnl_value)}")
 
                     if outcome == "OPEN":
                         new_outcome = st.selectbox(
                             "Update Outcome",
-                            [
-                                "OPEN",
-                                "WIN",
-                                "LOSS",
-                                "BREAKEVEN",
-                            ],
+                            ["OPEN", "WIN", "LOSS", "BREAKEVEN"],
                             key=f"journal_outcome_{trade_row['id']}",
                         )
 
@@ -1721,117 +1489,68 @@ with journal_tab:
                                     exit_price,
                                 )
                                 st.rerun()
-
         else:
-            st.info("No trades in the journal yet.")
+            st.info("No trades in journal.")
 
     except Exception as exc:
-        st.error(f"Error loading journal: {exc}")
+        st.error(f"Journal error: {exc}")
 
 
-# =====================================================================
-# STATS TAB
-# =====================================================================
+# ---------------------------------------------------------------------
+# PERFORMANCE TAB
+# ---------------------------------------------------------------------
 
 with stats_tab:
-    st.subheader("Performance Statistics")
+    st.write("")
+    render_section("EDGE TRACKING", "Performance")
 
     try:
         stats = calculate_statistics()
 
         if stats:
             c1, c2, c3, c4, c5 = st.columns(5)
-
-            c1.metric(
-                "Trades",
-                stats["total_trades"],
-            )
-            c2.metric(
-                "Win Rate",
-                f"{stats['win_rate']}%",
-            )
-            c3.metric(
-                "Profit Factor",
-                f"{stats['profit_factor']}",
-            )
-            c4.metric(
-                "Expectancy",
-                money(stats["expectancy"]),
-            )
-            c5.metric(
-                "Total P&L",
-                money(stats["total_pnl"]),
-            )
+            c1.metric("TRADES", stats["total_trades"])
+            c2.metric("WIN RATE", f"{stats['win_rate']}%")
+            c3.metric("PROFIT FACTOR", stats["profit_factor"])
+            c4.metric("EXPECTANCY", money(stats["expectancy"]))
+            c5.metric("TOTAL P&L", money(stats["total_pnl"]))
 
             st.divider()
 
-            d1, d2, d3 = st.columns(3)
-
-            with d1:
-                st.write(f"Wins: {stats['wins']}")
-                st.write(f"Losses: {stats['losses']}")
-                st.write(f"Breakeven: {stats['breakeven']}")
-
-            with d2:
-                st.write(
-                    f"Average Win: {money(stats['avg_win'])}"
-                )
-                st.write(
-                    f"Average Loss: {money(stats['avg_loss'])}"
-                )
-
-            with d3:
-                st.write(
-                    f"Max Drawdown: {money(stats['max_drawdown'])}"
-                )
-                st.write(
-                    f"Profit Factor: {stats['profit_factor']}"
-                )
-
             try:
                 dna_df = analyze_dna_performance()
-
                 if len(dna_df) > 0:
-                    st.divider()
-                    st.subheader("Trade DNA Analysis")
-                    st.dataframe(
-                        dna_df,
-                        use_container_width=True,
-                    )
+                    render_section("PATTERN MEMORY", "Trade DNA")
+                    st.dataframe(dna_df, use_container_width=True)
             except Exception:
                 pass
-
         else:
-            st.info(
-                "No closed trades yet. Statistics will appear after "
-                "trades complete."
-            )
+            st.info("No closed trades yet.")
 
     except Exception as exc:
-        st.error(f"Error loading statistics: {exc}")
+        st.error(f"Statistics error: {exc}")
 
 
-# =====================================================================
+# ---------------------------------------------------------------------
 # BACKTEST TAB
-# =====================================================================
+# ---------------------------------------------------------------------
 
 with backtest_tab:
-    st.subheader("Historical Backtest")
+    st.write("")
+    render_section("HISTORICAL LAB", "Backtest")
 
     st.warning(
-        "This is the existing V1 backtester. Its results should NOT yet "
-        "be interpreted as the final V2 historical probability engine. "
-        "We will later make live setup logic and backtest logic share "
-        "the same deterministic strategy engine."
+        "This remains the legacy V1 backtester. Its results are NOT the "
+        "V2 MarketState comparable-setup probability engine."
     )
 
     try:
         available_years = get_available_years()
 
         if available_years:
-            st.success(
-                f"Historical data available from "
-                f"{available_years[0]} to {available_years[-1]}"
+            st.caption(
+                f"Historical data: {available_years[0]} through "
+                f"{available_years[-1]}"
             )
 
             col1, col2, col3 = st.columns(3)
@@ -1839,11 +1558,8 @@ with backtest_tab:
             with col1:
                 selected_year = st.selectbox(
                     "Year",
-                    ["All"]
-                    + [str(y) for y in available_years],
-                    key="v2_bt_year",
+                    ["All"] + [str(y) for y in available_years],
                 )
-
                 if selected_year != "All":
                     start_date = f"{selected_year}-01-01"
                     end_date = f"{selected_year}-12-31"
@@ -1857,18 +1573,16 @@ with backtest_tab:
                     5,
                     80,
                     15,
-                    key="v2_bt_strength",
                 )
 
             with col3:
                 use_trailing_stop = st.checkbox(
                     "Use Trailing Stop",
                     value=False,
-                    key="v2_bt_trailing",
                 )
 
             if st.button(
-                "🚀 Run Existing Backtest",
+                "RUN LEGACY BACKTEST",
                 type="primary",
                 use_container_width=True,
             ):
@@ -1886,195 +1600,149 @@ with backtest_tab:
                         use_trailing_stop=use_trailing_stop,
                     )
 
-                if (
-                    result
-                    and result["stats"]["total_trades"] > 0
-                ):
-                    result_stats = result["stats"]
-
+                if result and result["stats"]["total_trades"] > 0:
+                    rs = result["stats"]
                     r1, r2, r3, r4 = st.columns(4)
-
-                    r1.metric(
-                        "Trades",
-                        result_stats["total_trades"],
-                    )
-                    r2.metric(
-                        "Win Rate",
-                        f"{result_stats['win_rate']:.1f}%",
-                    )
-                    r3.metric(
-                        "Profit Factor",
-                        f"{result_stats['profit_factor']:.2f}",
-                    )
-                    r4.metric(
-                        "Return",
-                        f"{result_stats['total_return']:.1f}%",
-                    )
-
-                    st.write(
-                        f"Final capital: "
-                        f"${result_stats['final_capital']:,.0f} "
-                        f"• Max DD: "
-                        f"{result_stats['max_drawdown']:.1f}%"
-                    )
-
+                    r1.metric("TRADES", rs["total_trades"])
+                    r2.metric("WIN RATE", f"{rs['win_rate']:.1f}%")
+                    r3.metric("PROFIT FACTOR", f"{rs['profit_factor']:.2f}")
+                    r4.metric("RETURN", f"{rs['total_return']:.1f}%")
                 else:
-                    st.warning(
-                        "No trades generated. Try a lower zone-strength "
-                        "threshold or a broader date range."
-                    )
-
+                    st.warning("No trades generated.")
         else:
-            st.warning(
-                "No historical data is currently available."
-            )
+            st.warning("No historical data.")
 
     except Exception as exc:
         st.error(f"Backtest error: {exc}")
 
 
-# =====================================================================
+# ---------------------------------------------------------------------
 # SYSTEM TAB
-# =====================================================================
+# ---------------------------------------------------------------------
 
 with system_tab:
-    st.subheader("System / Data Diagnostics")
+    st.write("")
+    render_section("UNDER THE HOOD", "System / MarketState Diagnostics")
 
-    sys1, sys2, sys3 = st.columns(3)
+    sys1, sys2, sys3, sys4 = st.columns(4)
 
-    sys1.metric(
-        "Application",
-        "V2.1 Development",
-    )
-
+    sys1.metric("DASHBOARD", "V2.5.1")
     sys2.metric(
-        "Symbol",
-        DATA_SYMBOL,
+        "MARKETSTATE",
+        market_state.engine_versions.get("market_state", "--"),
     )
-
-    sys3.metric(
-        "Data Health",
-        snapshot["data_health"],
-    )
-
-    st.caption(
-        "This local V2 build intentionally keeps the existing database "
-        "schema and V1 engines while the dashboard is being upgraded."
+    sys3.metric("SYMBOL", market_state.root_symbol)
+    sys4.metric(
+        "PROFESSOR READY",
+        "YES" if market_state.professor_ready else "NO",
     )
 
     st.divider()
+    render_section("VERSIONS", "Engine Stack")
+
+    if market_state.engine_versions:
+        versions_df = pd.DataFrame(
+            [
+                {"Engine": key, "Version": value}
+                for key, value in market_state.engine_versions.items()
+            ]
+        )
+        st.dataframe(
+            versions_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+    render_section("DATA", "Database Inventory")
 
     try:
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute(
             """
-            SELECT timeframe, COUNT(*)
+            SELECT
+                timeframe,
+                COUNT(*),
+                MIN(timestamp),
+                MAX(timestamp)
             FROM gold_ohlcv
             GROUP BY timeframe
             ORDER BY timeframe
             """
         )
-
         rows = cur.fetchall()
-
-        if rows:
-            st.write("### Database Rows")
-
-            st.dataframe(
-                pd.DataFrame(
-                    rows,
-                    columns=[
-                        "Timeframe",
-                        "Row Count",
-                    ],
-                ),
-                use_container_width=True,
-            )
-
-        cur.execute(
-            """
-            SELECT timeframe, MAX(timestamp)
-            FROM gold_ohlcv
-            GROUP BY timeframe
-            ORDER BY timeframe
-            """
-        )
-
-        latest = cur.fetchall()
-
-        if latest:
-            st.write("### Latest Stored Timestamps")
-
-            st.dataframe(
-                pd.DataFrame(
-                    latest,
-                    columns=[
-                        "Timeframe",
-                        "Latest Timestamp",
-                    ],
-                ),
-                use_container_width=True,
-            )
-
         cur.close()
         conn.close()
 
+        if rows:
+            db_df = pd.DataFrame(
+                rows,
+                columns=[
+                    "Timeframe",
+                    "Candles",
+                    "Oldest",
+                    "Newest",
+                ],
+            )
+            st.dataframe(
+                db_df,
+                use_container_width=True,
+                hide_index=True,
+            )
     except Exception as exc:
         st.error(f"Database diagnostics error: {exc}")
 
     st.divider()
+    render_section("GUARDRAILS", "MarketState Warnings")
 
-    st.write("### Current Economic Event Output")
+    if market_state.warnings:
+        for warning in market_state.warnings:
+            st.warning(warning)
+    else:
+        st.success("No MarketState warnings.")
+
+    st.divider()
+    render_section("AI BRIDGE", "Professor Context Payload")
+    st.json(market_state.professor_context, expanded=False)
+
+    st.divider()
+    render_section("EVENTS", "Economic Event Output")
 
     try:
         old_stdout = sys.stdout
         sys.stdout = StringIO()
-
         display_news_calendar()
-
         output = sys.stdout.getvalue()
         sys.stdout = old_stdout
 
         if output.strip():
             st.text(output)
         else:
-            st.caption(
-                "No text returned by the existing news calendar."
-            )
+            st.caption("No event-calendar text returned.")
 
     except Exception as exc:
         try:
             sys.stdout = old_stdout
         except Exception:
             pass
-
-        st.caption(
-            f"News calendar unavailable: {exc}"
-        )
+        st.caption(f"News calendar unavailable: {exc}")
 
     st.divider()
-
-    st.write("### V2 Roadmap")
+    render_section("BUILD PATH", "Architecture Roadmap")
 
     roadmap = pd.DataFrame(
         [
-            ["V2.1", "Dashboard + interactive chart", "IN PROGRESS"],
-            ["V2.2", "Market structure engine", "NEXT"],
-            ["V2.3", "Zone engine V2", "PLANNED"],
-            ["V2.4", "Setup state machine", "PLANNED"],
-            ["V2.5", "Long/short trade plan engine", "PLANNED"],
-            ["V2.6", "Contract risk/value engine", "PLANNED"],
-            ["V2.7", "Backtest-derived probability", "PLANNED"],
-            ["V2.8", "Professor integration", "PLANNED"],
-            ["V2.9", "Multi-futures architecture", "PLANNED"],
+            ["V2.2", "Canonical MarketState", "COMPLETE"],
+            ["V2.4", "Trading Pulse Command Center", "COMPLETE"],
+            ["V2.5", "Confirmation + Risk + Trade Plan", "CURRENT"],
+            ["V2.6", "Professor Conversation", "NEXT"],
+            ["V2.7", "Comparable Setup Backtesting", "PLANNED"],
+            ["V2.8", "AI Professor Conversation", "PLANNED"],
+            ["V2.9", "Multi-Symbol Futures Scanner", "PLANNED"],
+            ["V3.0", "Cross-Market Opportunity Ranking", "PLANNED"],
         ],
-        columns=[
-            "Milestone",
-            "Scope",
-            "Status",
-        ],
+        columns=["Milestone", "Scope", "Status"],
     )
 
     st.dataframe(
@@ -2089,8 +1757,13 @@ with system_tab:
 # ---------------------------------------------------------------------
 
 st.divider()
-
-st.caption(
-    "The Trading Pulse • Gold Trading Coach V2 Development • "
-    "Educational market-analysis software • Not financial advice."
+st.markdown(
+    """
+    <div class="tp-footer">
+        THE TRADING PULSE / GOLD TRADING COACH V2.5.1 /
+        CANONICAL MARKETSTATE ARCHITECTURE /
+        EDUCATIONAL MARKET-ANALYSIS SOFTWARE / NOT FINANCIAL ADVICE
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
