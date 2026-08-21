@@ -1,4 +1,3 @@
-
 """
 The Trading Pulse - Market State Builder V2.8A
 
@@ -60,6 +59,7 @@ from database import get_connection
 from instruments import get_instrument
 from market_clock import MarketClock, live_clock, replay_clock, normalize_timestamp
 from setup_fingerprint import build_setup_fingerprint
+from setup_candidate_engine import build_setup_candidates
 from market_state import (
     MarketState,
     ZoneState,
@@ -853,12 +853,21 @@ def build_market_state(
     state.confirmation = confirmation
     state.trade = trade
 
+    # V2.9B: one setup grade everywhere.  If a deterministic trade plan exists,
+    # its displayed grade is the exact SetupCandidate grade for the selected zone,
+    # not the older raw zone grade.
+    if state.trade is not None and state.selected_zone is not None:
+        for _candidate in build_setup_candidates(state):
+            if _candidate.is_selected_zone:
+                state.trade.setup_grade = _candidate.grade
+                break
+
     # --------------------------------------------------------------
     # Professor bridge
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.8C",
+        "architecture_version": "2.9B",
         "setup_fingerprint": build_setup_fingerprint(state, clock=clock),
         "market_clock": clock.to_dict(),
         "replay_guardrail": {
@@ -907,7 +916,7 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.8C",
+        "market_state": "2.9B",
         "setup_fingerprint": "v2.8B",
         "historical_replay": "v2.8C",
         "market_clock": "v2.8A",
@@ -916,6 +925,7 @@ def build_market_state(
         "zone_selector": "v2.5_hierarchical",
         "confirmation": "v2.7_evidence_engine",
         "trade_plan": "v2.7_structural_targets",
+        "setup_candidate": "v2.9B_zone_vs_setup_quality",
     }
 
     missing_timeframes = [

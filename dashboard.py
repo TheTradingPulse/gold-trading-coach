@@ -1,6 +1,6 @@
 """
 THE TRADING PULSE
-Gold Trading Coach V2.8H Dashboard
+Gold Trading Coach V2.9C Dashboard
 
 Rules:
 - MarketState is the single source of truth.
@@ -38,6 +38,8 @@ from streamlit_autorefresh import st_autorefresh
 
 from database import get_connection
 from market_state_builder import build_market_state, load_market_data
+from setup_candidate_engine import build_setup_candidates, filter_candidates, GRADE_RANK
+from execution_lifecycle_engine import build_execution_lifecycle, candidate_stage, broker_order_intent
 from live_data_engine import fetch_latest_data, get_data_source_name
 from journal_engine import calculate_statistics, get_all_trades, update_outcome
 from dna_engine import analyze_dna_performance
@@ -922,31 +924,18 @@ def get_conflict_zone(state):
 
 
 
-def potential_zone_grade(zone):
-    """
-    Display-only learning grade for potential zones.
-
-    This does NOT change MarketState, Trade Ready, setup lifecycle, entries,
-    stops, targets, or historical probability. It only lets the chart expose
-    developing structure to the trader before it becomes a qualified setup.
-    """
+def candidate_for_zone(state, zone):
     z = zone_dict(zone) or {}
-    strength = safe_float(z.get("strength"), 0.0)
-    freshness = safe_float(z.get("freshness_score"), 0.0)
-    retests = int(safe_float(z.get("retest_count"), 0) or 0)
+    for candidate in build_setup_candidates(state):
+        if (
+            candidate.zone_type == str(z.get("type", "")).lower()
+            and candidate.timeframe == str(z.get("timeframe", ""))
+            and abs(candidate.lower_bound - safe_float(z.get("lower_bound"), 0.0)) < 0.001
+            and abs(candidate.upper_bound - safe_float(z.get("upper_bound"), 0.0)) < 0.001
+        ):
+            return candidate
+    return None
 
-    # Conservative visual-quality ladder. Freshness can help a borderline zone;
-    # repeated tests reduce the display grade.
-    score = strength + min(max(freshness, 0.0), 100.0) * 0.08 - retests * 4.0
-    if score >= 95:
-        return "A+"
-    if score >= 80:
-        return "A"
-    if score >= 65:
-        return "B"
-    if score >= 45:
-        return "C"
-    return "D"
 
 def zone_summary(zone):
     z = zone_dict(zone)
@@ -1083,81 +1072,56 @@ def build_candlestick_chart(
                  alt.Tooltip("close:Q", title="Close", format=",.2f")])
     chart = wicks + bodies
 
-    # Potential-zone filter controls the LEARNING layer only.
-    # It never upgrades MarketState or turns a zone into a trade.
-    rank = {"D": 0, "C": 1, "B": 2, "A": 3, "A+": 4}
-    threshold = 0 if min_zone_grade == "ALL" else rank.get(min_zone_grade, 0)
+    # V2.9B: chart grades are SETUP grades from the canonical Setup Candidate Engine.
+    # One grading brain now drives BOTH the chart and candidate intelligence.
     grade_switches = {
         "A+": show_grade_aplus,
         "A": show_grade_a,
         "B": show_grade_b,
         "C": show_grade_c,
+        "D": False,
     }
 
-    def allowed_potential(zone):
-        grade = potential_zone_grade(zone)
-        return (
-            grade in grade_switches
-            and rank.get(grade, 0) >= threshold
-            and grade_switches.get(grade, False)
-        )
-
     def allowed_market_state(zone):
-        z = zone_dict(zone)
-        if not z:
-            return False
-        # Canonical overlays are independent of the potential-zone grade filter.
-        return True
+        return bool(zone_dict(zone))
 
     zone_rows = []
     context_zone = get_context_zone(state)
     execution_zone = get_execution_zone(state)
     conflict_zone = get_conflict_zone(state)
 
-    # Potential zones are a trader-learning layer, NOT trade signals.
-    # Pull from every canonical zone the engine detected, rank by proximity,
-    # and show a maximum of six bands to prevent chart spaghetti.
     tf_map = {"1D": "D", "1W": "W"}
     active_tf = tf_map.get(timeframe_label, timeframe_label)
-    candidate_zones = (
-        list(getattr(state, "supply_zones", []) or [])
-        + list(getattr(state, "demand_zones", []) or [])
+    if active_tf in ("1m", "5m", "15m", "30m", "1H"):
+        relevant_tfs = {active_tf, "1H", "4H", "D"}
+    elif active_tf == "4H":
+        relevant_tfs = {"4H", "D"}
+    elif active_tf in ("D", "W"):
+        relevant_tfs = {"D"}
+    else:
+        relevant_tfs = {active_tf}
+
+    all_candidates = build_setup_candidates(state)
+    visible_candidates = filter_candidates(
+        all_candidates,
+        minimum_grade=min_zone_grade,
+        enabled_grades=grade_switches,
+        relevant_timeframes=relevant_tfs,
+        limit=6,
     )
-    potential = []
-    for zone in candidate_zones:
-        z = zone_dict(zone)
-        if not z or not allowed_potential(zone):
-            continue
 
-        ztf = str(z.get("timeframe", ""))
-        relevant = (
-            ztf == active_tf
-            or (active_tf in ("1m", "5m", "15m", "30m", "1H") and ztf in ("1H", "4H", "D"))
-            or (active_tf == "4H" and ztf in ("4H", "D"))
-            or (active_tf in ("D", "W") and ztf == "D")
-        )
-        if not relevant:
-            continue
-
-        lower = safe_float(z.get("lower_bound"))
-        upper = safe_float(z.get("upper_bound"))
-        if lower is None or upper is None:
-            continue
-
-        grade = potential_zone_grade(zone)
-        distance = safe_float(z.get("distance_percent"), 999.0)
-        ztype = str(z.get("type", "")).lower()
-        potential.append({
-            "lower": lower,
-            "upper": upper,
-            "zone_role": "Potential Demand" if ztype == "demand" else "Potential Supply",
-            "grade": grade,
-            "distance": distance,
-            "timeframe": ztf,
+    for candidate in visible_candidates:
+        zone_rows.append({
+            "lower": candidate.lower_bound,
+            "upper": candidate.upper_bound,
+            "zone_role": "Potential Demand" if candidate.zone_type == "demand" else "Potential Supply",
+            "grade": candidate.grade,
+            "zone_grade": candidate.zone_grade,
+            "setup_score": candidate.setup_score,
+            "distance": candidate.distance_percent,
+            "timeframe": candidate.timeframe,
+            "candidate_label": f"{candidate.grade} SETUP / {candidate.zone_grade} ZONE / {candidate.timeframe} {candidate.zone_type.upper()} / {candidate.lifecycle}",
         })
-
-    potential.sort(key=lambda r: (r["distance"], -rank.get(r["grade"], 0)))
-    zone_rows.extend(potential[:6])
 
     # Canonical MarketState overlays remain separate and OFF by default.
     if show_context and allowed_market_state(context_zone):
@@ -1199,10 +1163,29 @@ def build_candlestick_chart(
                     range=["#2f9e5b","#c94b52",ACCENT,GREEN,RED]
                 ), legend=None),
             tooltip=[alt.Tooltip("zone_role:N",title="Zone"),
-                     alt.Tooltip("grade:N",title="Grade"),
+                     alt.Tooltip("grade:N",title="Setup Grade"),
+                     alt.Tooltip("zone_grade:N",title="Zone Grade"),
                      alt.Tooltip("lower:Q",title="Low",format=",.2f"),
                      alt.Tooltip("upper:Q",title="High",format=",.2f")])
         chart = zone_layer + chart
+
+        # Label potential zones with the SAME V2.9A grade/lifecycle used by the filter.
+        label_rows = [r for r in zone_rows if r.get("candidate_label")]
+        if label_rows:
+            last_ts = data["timestamp"].max()
+            ldf = pd.DataFrame([{
+                "timestamp": last_ts,
+                "price": (r["lower"] + r["upper"]) / 2.0,
+                "label": r["candidate_label"],
+            } for r in label_rows])
+            labels = alt.Chart(ldf).mark_text(
+                align="right", dx=-6, fontSize=10, fontWeight="bold", color=TEXT
+            ).encode(
+                x=alt.X("timestamp:T", axis=None),
+                y=alt.Y("price:Q", scale=alt.Scale(domain=[y_min, y_max], zero=False), axis=None),
+                text="label:N",
+            )
+            chart = chart + labels
 
     # Optional trader-toolkit overlays.
     line_specs = []
@@ -1247,6 +1230,58 @@ def build_candlestick_chart(
         chart += alt.Chart(pd.DataFrame({"price":[state.current_price]})).mark_rule(
             color="#35c76f", opacity=.45, strokeDash=[2,2], strokeWidth=.7).encode(
             y=alt.Y("price:Q",scale=alt.Scale(domain=[y_min,y_max],zero=False),axis=None))
+
+    # V2.9C: exact execution levels appear ONLY for canonical TRADE_READY.
+    # This deliberately adds no lines for potential/armed/confirming candidates.
+    trade = getattr(state, "trade", None)
+    if str(getattr(state, "setup_state", "")).upper() == "TRADE_READY" and trade is not None:
+        exact_rows = [
+            {"price": float(trade.entry), "label": f"ENTRY {float(trade.entry):,.2f}", "kind": "ENTRY"},
+            {"price": float(trade.stop), "label": f"STOP {float(trade.stop):,.2f}", "kind": "STOP"},
+        ]
+        for target in (getattr(trade, "targets", None) or [])[:3]:
+            exact_rows.append({
+                "price": float(target.price),
+                "label": f"{target.name} {float(target.price):,.2f} / {float(target.rr_ratio):.1f}R",
+                "kind": "TARGET",
+            })
+
+        edf = pd.DataFrame(exact_rows)
+        exact_rules = alt.Chart(edf).mark_rule(strokeWidth=1.35).encode(
+            y=alt.Y("price:Q", scale=alt.Scale(domain=[y_min,y_max],zero=False), axis=None),
+            color=alt.Color(
+                "kind:N",
+                scale=alt.Scale(
+                    domain=["ENTRY","STOP","TARGET"],
+                    range=["#f0d98a","#ef4444","#35c76f"],
+                ),
+                legend=None,
+            ),
+            strokeDash=alt.condition(
+                alt.datum.kind == "ENTRY",
+                alt.value([1,0]),
+                alt.value([6,4]),
+            ),
+        )
+        last_ts = data["timestamp"].max()
+        exact_labels_df = edf.copy()
+        exact_labels_df["timestamp"] = last_ts
+        exact_labels = alt.Chart(exact_labels_df).mark_text(
+            align="right", dx=-8, dy=-6, fontSize=10, fontWeight="bold"
+        ).encode(
+            x=alt.X("timestamp:T", axis=None),
+            y=alt.Y("price:Q", scale=alt.Scale(domain=[y_min,y_max],zero=False), axis=None),
+            text="label:N",
+            color=alt.Color(
+                "kind:N",
+                scale=alt.Scale(
+                    domain=["ENTRY","STOP","TARGET"],
+                    range=["#f0d98a","#ef4444","#35c76f"],
+                ),
+                legend=None,
+            ),
+        )
+        chart = chart + exact_rules + exact_labels
 
     # Volume remains optional and deliberately subtle.
     if show_volume and "volume" in data and data["volume"].fillna(0).sum() > 0:
@@ -1631,6 +1666,62 @@ with dashboard_tab:
             st.error(f"Chart error: {exc}")
 
     with intel_col:
+        # V2.9A candidate intelligence uses the exact same grades shown on chart.
+        candidates_29a = build_setup_candidates(market_state)
+        enabled_29a = {
+            "A+": st.session_state.zone_grade_aplus,
+            "A": st.session_state.zone_grade_a,
+            "B": st.session_state.zone_grade_b,
+            "C": st.session_state.zone_grade_c,
+            "D": False,
+        }
+        visible_29a = filter_candidates(
+            candidates_29a,
+            minimum_grade=st.session_state.zone_quality,
+            enabled_grades=enabled_29a,
+            limit=6,
+        )
+        st.markdown("**SETUP CANDIDATES / V2.9C**")
+        counts = {g: sum(c.grade == g for c in candidates_29a) for g in ("A+", "A", "B", "C")}
+        st.caption(
+            f"Detected {len(candidates_29a)} / Visible {len(visible_29a)} | "
+            f"A+ {counts['A+']} / A {counts['A']} / B {counts['B']} / C {counts['C']}"
+        )
+        if visible_29a:
+            best = visible_29a[0]
+            st.markdown(
+                f"**{best.grade} {best.timeframe} {best.zone_type.upper()}**  "
+                f"{money(best.lower_bound)} - {money(best.upper_bound)}"
+            )
+            best_execution = build_execution_lifecycle(market_state, best)
+            st.caption(
+                f"Setup {best.grade} {best.setup_score:.1f}/100 / Zone {best.zone_grade} {best.zone_quality_score:.1f}/100 / "
+                f"{best_execution.stage} / Distance {best.distance_points:.2f} pts ({best.distance_percent:.3f}%)"
+            )
+            if best_execution.trade_ready:
+                st.success(
+                    f"TRADE READY / {best_execution.direction} / Entry {money(best_execution.entry)} / "
+                    f"Stop {money(best_execution.stop)} / Grade {best_execution.setup_grade}"
+                )
+            elif best_execution.stage in ("ARMED", "CONFIRMING", "RISK_VALIDATING"):
+                st.warning(f"{best_execution.stage.replace('_',' ')} / {best_execution.reason}")
+            else:
+                st.info(f"{best_execution.stage.replace('_',' ')} / {best_execution.reason}")
+            with st.expander("Why this candidate has this grade"):
+                for reason in best.reasons:
+                    st.write(f"- {reason}")
+                st.caption("Setup grade combines zone quality + timing/context. It is not win probability and cannot make Trade Ready true.")
+            with st.expander("Structural planning preview", expanded=False):
+                st.caption("STRUCTURAL PREVIEW ONLY — not an order. Exact entry/stop/targets unlock only when canonical status becomes TRADE READY.")
+                p1,p2,p3 = st.columns(3)
+                p1.metric("ZONE ENTRY", money(best.projected_entry))
+                p2.metric("INVALIDATION", money(best.projected_stop))
+                p3.metric("FIRST STRUCTURE", money(best.projected_target))
+                if best.projected_rr is not None:
+                    st.caption(f"Preview room: {best.projected_rr:.2f}R to nearest opposing structure. Trade Ready still controls execution.")
+        else:
+            st.caption("No candidates survive the current grade switches/filter.")
+
         execution = zone_dict(get_execution_zone(market_state))
         conflict = zone_dict(get_conflict_zone(market_state))
 
@@ -1695,6 +1786,12 @@ with dashboard_tab:
             target_cols = st.columns(len(trade.targets))
             for idx,target in enumerate(trade.targets):
                 target_cols[idx].metric(target.name, money(target.price), f"{target.rr_ratio:.1f}R")
+        ready_candidates = build_setup_candidates(market_state)
+        selected_candidate = next((c for c in ready_candidates if c.is_selected_zone), None)
+        execution_snapshot = build_execution_lifecycle(market_state, selected_candidate)
+        st.success("BROKER GATE: ELIGIBLE FOR FUTURE ORDER ADAPTER — account risk/quantity authorization still required.")
+        with st.expander("Broker-ready deterministic order packet", expanded=False):
+            st.json(broker_order_intent(market_state, selected_candidate), expanded=False)
 
     with st.expander("MARKET STRUCTURE / MULTI-TIMEFRAME DETAIL", expanded=False):
         trend_cols = st.columns(len(TREND_DISPLAY_ORDER))
@@ -2045,7 +2142,7 @@ st.divider()
 st.markdown(
     """
     <div class="tp-footer">
-        THE TRADING PULSE / GOLD TRADING COACH V2.8H /
+        THE TRADING PULSE / GOLD TRADING COACH V2.9A /
         CANONICAL MARKETSTATE ARCHITECTURE /
         EDUCATIONAL MARKET-ANALYSIS SOFTWARE / NOT FINANCIAL ADVICE
     </div>
