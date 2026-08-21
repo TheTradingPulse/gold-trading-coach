@@ -61,6 +61,7 @@ from market_clock import MarketClock, live_clock, replay_clock, normalize_timest
 from setup_fingerprint import build_setup_fingerprint
 from setup_candidate_engine import build_setup_candidates
 from data_integrity import evaluate_feed_status
+from market_data_provider import fetch_market_data
 from market_state import (
     MarketState,
     ZoneState,
@@ -113,7 +114,12 @@ def load_market_data(
     timeframe: str,
     limit: int = 500,
     as_of=None,
+    symbol: str = "GC",
 ) -> Optional[pd.DataFrame]:
+
+    symbol = str(symbol).upper()
+    if symbol != "GC":
+        return fetch_market_data(symbol, timeframe, limit=limit, as_of=as_of)
 
     conn = None
 
@@ -185,7 +191,7 @@ def load_market_data(
                 pass
 
 
-def get_latest_market_price(as_of=None):
+def get_latest_market_price(as_of=None, symbol="GC"):
     for timeframe in [
         "1m",
         "5m",
@@ -198,6 +204,7 @@ def get_latest_market_price(as_of=None):
             timeframe,
             limit=1,
             as_of=as_of,
+            symbol=symbol,
         )
 
         if df is None or df.empty:
@@ -221,7 +228,7 @@ def get_latest_market_price(as_of=None):
 # TRENDS
 # ---------------------------------------------------------------------
 
-def build_trends(as_of=None) -> dict[str, str]:
+def build_trends(as_of=None, symbol="GC") -> dict[str, str]:
     trends = {}
 
     for timeframe in TIMEFRAMES:
@@ -229,6 +236,7 @@ def build_trends(as_of=None) -> dict[str, str]:
             timeframe,
             limit=200,
             as_of=as_of,
+            symbol=symbol,
         )
 
         if df is None or len(df) < 50:
@@ -410,6 +418,7 @@ def convert_zone(
 def build_zones(
     current_price: float,
     as_of=None,
+    symbol="GC",
 ):
     supply = []
     demand = []
@@ -419,6 +428,7 @@ def build_zones(
             timeframe,
             limit=500,
             as_of=as_of,
+            symbol=symbol,
         )
 
         if df is None or len(df) < 15:
@@ -705,11 +715,6 @@ def build_market_state(
         symbol
     )
 
-    if instrument.root_symbol != "GC":
-        raise NotImplementedError(
-            "V2.2 storage currently supports GC only. "
-            "The MarketState interface is multi-symbol ready."
-        )
 
     state = create_empty_market_state(
         instrument.root_symbol
@@ -719,7 +724,7 @@ def build_market_state(
         price,
         market_timestamp,
         price_timeframe,
-    ) = get_latest_market_price(as_of=cutoff)
+    ) = get_latest_market_price(as_of=cutoff, symbol=instrument.root_symbol)
 
     if price is None:
         state.warnings.append(
@@ -743,7 +748,7 @@ def build_market_state(
     # Trend context
     # --------------------------------------------------------------
 
-    trends = build_trends(as_of=cutoff)
+    trends = build_trends(as_of=cutoff, symbol=instrument.root_symbol)
 
     state.trends = trends
 
@@ -766,6 +771,7 @@ def build_market_state(
     ) = build_zones(
         state.current_price,
         as_of=cutoff,
+        symbol=instrument.root_symbol,
     )
 
     state.supply_zones = supply_zones
@@ -802,7 +808,7 @@ def build_market_state(
     # --------------------------------------------------------------
 
     def clocked_market_data(timeframe: str, limit: int = 500):
-        return load_market_data(timeframe, limit=limit, as_of=cutoff)
+        return load_market_data(timeframe, limit=limit, as_of=cutoff, symbol=instrument.root_symbol)
 
     (
         setup_state,
@@ -861,7 +867,7 @@ def build_market_state(
     # V2.10E DATA-INTEGRITY BROKER GATE.
     # Yahoo GC=F remains useful for education/research/planned levels, but delayed
     # continuous/front-month data can never become executable/broker eligible.
-    feed_status = evaluate_feed_status(state.market_timestamp)
+    feed_status = evaluate_feed_status(state.market_timestamp, requested_symbol=instrument.data_symbol)
     if not feed_status.execution_eligible:
         if state.trade is not None or state.setup_state in ("TRADE_READY", "RISK_VALIDATING"):
             state.warnings.append("Execution blocked by data-integrity gate: " + feed_status.reason)
@@ -902,7 +908,7 @@ def build_market_state(
             "future_data_allowed": False if clock.is_replay else None,
         },
         "price_source_timeframe": price_timeframe,
-        "storage_status": "GC-only legacy storage",
+        "storage_status": "GC database / multi-market Yahoo reference adapter",
         "trade_values_generated_by_ai": False,
         "decision_packet": {
             "setup_state": state.setup_state,
@@ -1175,5 +1181,7 @@ if __name__ == "__main__":
     print_market_state(state)
 
 ############################################################
+
+
 
 

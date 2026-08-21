@@ -54,7 +54,7 @@ def _utc(value):
         return None
 
 
-def evaluate_feed_status(market_timestamp, now=None, source_id=SOURCE_ID):
+def evaluate_feed_status(market_timestamp, now=None, source_id=SOURCE_ID, requested_symbol=REQUESTED_SYMBOL):
     """Return canonical feed truth for the candle powering MarketState.
 
     Yahoo is intentionally DELAYED even when its newest candle is recent.
@@ -65,7 +65,7 @@ def evaluate_feed_status(market_timestamp, now=None, source_id=SOURCE_ID):
     ts = _utc(market_timestamp)
     if ts is None:
         return FeedStatus(
-            SOURCE_ID, SOURCE_NAME, REQUESTED_SYMBOL, CONTRACT_MODE,
+            SOURCE_ID, SOURCE_NAME, requested_symbol, CONTRACT_MODE,
             DISPLAY_CONTRACT, "OFFLINE", None, EXPECTED_DELAY_MINUTES,
             False, False, "No usable market timestamp is stored.", None,
         )
@@ -93,7 +93,7 @@ def evaluate_feed_status(market_timestamp, now=None, source_id=SOURCE_ID):
     if age <= stale_after:
         status = "DELAYED"
         reason = (
-            "Yahoo GC=F is delayed/continuous futures data. Useful for research, "
+            f"Yahoo {requested_symbol} is delayed/continuous futures data. Useful for research, "
             "education and higher-timeframe development; not broker-execution eligible."
         )
     else:
@@ -101,11 +101,13 @@ def evaluate_feed_status(market_timestamp, now=None, source_id=SOURCE_ID):
         reason = f"Newest stored Yahoo candle is {age:.1f} minutes old."
 
     return FeedStatus(
-        SOURCE_ID, SOURCE_NAME, REQUESTED_SYMBOL, CONTRACT_MODE,
+        SOURCE_ID, SOURCE_NAME, requested_symbol, CONTRACT_MODE,
         DISPLAY_CONTRACT, status, round(age, 2), EXPECTED_DELAY_MINUTES,
         False, False, reason, ts.isoformat(),
     )
 
 
-def provenance_dict(market_timestamp, now=None):
-    return evaluate_feed_status(market_timestamp, now=now).to_dict()
+def provenance_dict(market_timestamp, now=None, requested_symbol=REQUESTED_SYMBOL):
+    return evaluate_feed_status(market_timestamp, now=now, requested_symbol=requested_symbol).to_dict()
+
+

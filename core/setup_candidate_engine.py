@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from hashlib import sha256
 from typing import Any, Iterable, Optional
+from instruments import get_instrument
 
 ENGINE_VERSION = "2.12"
 GRADE_RANK = {"D": 0, "C": 1, "B": 2, "A": 3, "A+": 4}
@@ -111,7 +112,7 @@ def build_setup_candidates(state: Any) -> list[SetupCandidate]:
         distance=lower-price if price<lower else price-upper if price>upper else 0
         distance_pct=distance/price*100 if price else 0; lifecycle=_lifecycle(price,lower,upper,distance_pct,width)
         projected_entry=(upper if ztype=="demand" and price<lower else lower if ztype=="supply" and price>upper else price if lower<=price<=upper else (lower if ztype=="demand" else upper))
-        tick=.10 if symbol=="GC" else None
+        tick=get_instrument(symbol).tick_size
         projected_stop=(lower-2*tick if ztype=="demand" and tick else upper+2*tick if tick else None)
         target,opp=_nearest_opposing(ztype,projected_entry,zones)
         room=(abs(target-projected_entry) if target is not None else None)
@@ -202,4 +203,6 @@ def filter_candidates(candidates: Iterable[SetupCandidate], minimum_grade="B", e
         result.append(c)
     result.sort(key=lambda c:(c.distance_percent,-GRADE_RANK.get(c.grade,0),-c.setup_score))
     return result[:limit] if limit is not None else result
+
+
 

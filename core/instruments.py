@@ -3,11 +3,8 @@ The Trading Pulse - Futures Instrument Registry
 
 Central source of truth for futures contract specifications.
 
-GC remains the only enabled production instrument. The seven Market Watch
-instruments are registered now so the UI and future multi-market architecture
-share canonical identity, while enabled=False prevents them from being treated
-as validated Trading Pulse analysis instruments before their storage/engines
-are generalized.
+V3.0A enables the curated multi-market futures universe behind one canonical registry.
+All reusable engines consume Instrument metadata; Yahoo remains development/reference data.
 """
 
 from dataclasses import dataclass, asdict
@@ -46,19 +43,19 @@ INSTRUMENTS = {
     "GC": Instrument("GC", "Gold Futures", "futures", "COMEX", "USD",
                      0.10, 10.00, 100.00, "GC=F", "MGC", enabled=True),
     "SI": Instrument("SI", "Silver Futures", "futures", "COMEX", "USD",
-                     0.005, 25.00, 5000.00, "SI=F", "SIL", enabled=False),
+                     0.005, 25.00, 5000.00, "SI=F", "SIL", enabled=True),
     "ES": Instrument("ES", "E-mini S&P 500", "futures", "CME", "USD",
-                     0.25, 12.50, 50.00, "ES=F", "MES", enabled=False),
+                     0.25, 12.50, 50.00, "ES=F", "MES", enabled=True),
     "NQ": Instrument("NQ", "E-mini Nasdaq 100", "futures", "CME", "USD",
-                     0.25, 5.00, 20.00, "NQ=F", "MNQ", enabled=False),
+                     0.25, 5.00, 20.00, "NQ=F", "MNQ", enabled=True),
     "YM": Instrument("YM", "E-mini Dow", "futures", "CBOT", "USD",
-                     1.00, 5.00, 5.00, "YM=F", "MYM", enabled=False),
+                     1.00, 5.00, 5.00, "YM=F", "MYM", enabled=True),
     "RTY": Instrument("RTY", "E-mini Russell 2000", "futures", "CME", "USD",
-                      0.10, 5.00, 50.00, "RTY=F", "M2K", enabled=False),
+                      0.10, 5.00, 50.00, "RTY=F", "M2K", enabled=True),
     "CL": Instrument("CL", "WTI Crude Oil Futures", "futures", "NYMEX", "USD",
-                     0.01, 10.00, 1000.00, "CL=F", "MCL", enabled=False),
+                     0.01, 10.00, 1000.00, "CL=F", "MCL", enabled=True),
     "NG": Instrument("NG", "Natural Gas Futures", "futures", "NYMEX", "USD",
-                     0.001, 10.00, 10000.00, "NG=F", "MNG", enabled=False),
+                     0.001, 10.00, 10000.00, "NG=F", "MNG", enabled=True),
 }
 
 
@@ -81,3 +78,5 @@ def instrument_exists(symbol: str) -> bool:
 
 def get_enabled_symbols() -> list[str]:
     return [i.root_symbol for i in list_instruments(enabled_only=True)]
+
+

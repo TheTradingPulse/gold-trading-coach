@@ -46,6 +46,7 @@ from dna_engine import analyze_dna_performance
 from news_engine import generate_news_warning, display_news_calendar
 from backtest_engine import run_backtest, get_available_years
 from market_watch_engine import fetch_market_watch
+from instruments import get_instrument, get_enabled_symbols
 
 
 # ---------------------------------------------------------------------
@@ -67,9 +68,9 @@ st_autorefresh(interval=60 * 1000, key="tp_auto_refresh")
 # ---------------------------------------------------------------------
 
 APP_NAME = "THE TRADING PULSE"
-COACH_NAME = "GOLD TRADING COACH"
+COACH_NAME = "FUTURES TRADING COACH"
 DISPLAY_SYMBOL = "GC"
-MARKET_NAME = "COMEX GOLD FUTURES"
+MARKET_NAME = "GOLD FUTURES"
 ACCENT = "#d7b45a"
 ACCENT_SOFT = "#f0d98a"
 BG = "#07090d"
@@ -870,7 +871,7 @@ def render_market_watch(cards):
         '<div class="tp-market-watch-wrap">',
         '<div class="tp-market-watch-head">',
         '<div class="tp-market-watch-title">MARKET WATCH</div>',
-        '<div class="tp-market-watch-sub">Yahoo reference snapshot / GC Command Center active</div>',
+        '<div class="tp-market-watch-sub">Yahoo reference snapshot / click a symbol below to switch Command Center</div>',
         '</div>',
         '<div class="tp-market-grid">',
     ]
@@ -881,7 +882,7 @@ def render_market_watch(cards):
         change = safe_float(item.get("change"), 0.0)
         pct = safe_float(item.get("change_pct"), 0.0)
         direction = "up" if change > 0 else "down" if change < 0 else "flat"
-        active = " active" if symbol == "GC" else ""
+        active = " active" if symbol == st.session_state.get("active_symbol", "GC") else ""
         dot_cls = "up" if change > 0 else "down" if change < 0 else ""
         price_text = "--" if price is None else f"{price:,.2f}"
         change_text = "--" if price is None else f"{change:+,.2f} ({pct:+.2f}%)"
@@ -898,7 +899,7 @@ def render_market_watch(cards):
         ])
     html.extend([
         '</div>',
-        '<div class="tp-market-note">Scanner only: price and session change. GC has full Trading Pulse analysis; other symbols remain watch-only until their deterministic engines are validated.</div>',
+        '<div class="tp-market-note">V3.0A: all eight symbols use the same deterministic Trading Pulse analysis pipeline. Yahoo remains reference/development data.</div>',
         '</div>',
     ])
     st.markdown("".join(html), unsafe_allow_html=True)
@@ -925,17 +926,17 @@ def resample_30m(df):
 
 
 @st.cache_data(ttl=20, show_spinner=False)
-def get_chart_data(display_tf, limit=260):
+def get_chart_data(display_tf, limit=260, symbol="GC"):
     db_tf = CHART_TIMEFRAMES[display_tf]
     if display_tf == "30m":
-        raw = load_market_data("15m", limit=limit * 2 + 20)
+        raw = load_market_data("15m", limit=limit * 2 + 20, symbol=symbol)
         return resample_30m(raw)
-    return load_market_data(db_tf, limit=limit)
+    return load_market_data(db_tf, limit=limit, symbol=symbol)
 
 
 @st.cache_resource(ttl=15, show_spinner=False)
-def get_market_state():
-    return build_market_state("GC")
+def get_market_state(symbol="GC"):
+    return build_market_state(symbol)
 
 
 def get_zone_model(state):
@@ -1560,6 +1561,14 @@ def render_professor_bridge(state):
 # SESSION / MARKETSTATE
 # ---------------------------------------------------------------------
 
+if "active_symbol" not in st.session_state:
+    st.session_state.active_symbol = "GC"
+active_symbol = str(st.session_state.active_symbol).upper()
+active_instrument = get_instrument(active_symbol)
+DISPLAY_SYMBOL = active_symbol
+MARKET_NAME = active_instrument.name.upper()
+COACH_NAME = f"{active_instrument.name.upper()} COACH"
+
 if "chart_tf" not in st.session_state:
     st.session_state.chart_tf = DEFAULT_CHART_TF
 
@@ -1586,9 +1595,9 @@ for _key, _default in {
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
-with st.spinner("Building canonical GC MarketState..."):
+with st.spinner(f"Building canonical {active_symbol} MarketState..."):
     try:
-        market_state = get_market_state()
+        market_state = get_market_state(active_symbol)
     except Exception as exc:
         st.error(f"Unable to build MarketState: {exc}")
         st.stop()
@@ -1604,7 +1613,7 @@ news_warning, news_level = get_news_state()
 header_logo, header_title = st.columns([1.35, 5.65], gap="medium")
 with header_logo:
     if BRAND_LOGO.exists():
-        st.image(str(BRAND_LOGO), use_container_width=True)
+        st.image(str(BRAND_LOGO), width="stretch")
     else:
         st.markdown(f"<div style='color:#d7b45a;font-weight:900'>{APP_NAME}</div>", unsafe_allow_html=True)
 
@@ -1674,6 +1683,13 @@ with dashboard_tab:
     except Exception:
         market_watch = {}
     render_market_watch(market_watch)
+    _switch_cols = st.columns(len(MARKET_WATCH_ORDER))
+    for _i, _symbol in enumerate(MARKET_WATCH_ORDER):
+        if _switch_cols[_i].button(_symbol, key=f"switch_market_{_symbol}", width="stretch", type="primary" if _symbol == active_symbol else "secondary"):
+            if _symbol != active_symbol:
+                st.session_state.active_symbol = _symbol
+                st.session_state.focused_candidate_id = None
+                st.rerun()
 
     # V2.12 HIGH-PRIORITY RADAR.
     # This is deliberately separate from the active chart so a strong setup on
@@ -1720,7 +1736,7 @@ with dashboard_tab:
         button_type = "primary" if st.session_state.chart_tf == display_tf else "secondary"
         if tf_cols[index].button(
             display_tf,
-            use_container_width=True,
+            width="stretch",
             type=button_type,
             key=f"tf_{display_tf}",
         ):
@@ -1733,7 +1749,7 @@ with dashboard_tab:
 
     # Load active timeframe data once; OHLC metrics render directly beneath the chart.
     try:
-        chart_df = get_chart_data(selected_tf, 260)
+        chart_df = get_chart_data(selected_tf, 260, active_symbol)
     except Exception:
         chart_df = None
 
@@ -1801,7 +1817,7 @@ with dashboard_tab:
                     show_grade_c=st.session_state.zone_grade_c,
                 )
                 if chart is not None:
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, width="stretch")
 
                 note = f"{len(chart_df):,} candles / Minimum potential grade {st.session_state.zone_quality}"
                 if selected_tf == "30m":
@@ -1837,7 +1853,7 @@ with dashboard_tab:
                 if quick_cols[i % len(quick_cols)].button(
                     label,
                     key=f"quick_setup_{selected_tf}_{i}",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary" if i == current_index else "secondary",
                 ):
                     st.session_state[current_key] = i
@@ -1945,7 +1961,7 @@ with dashboard_tab:
         st.markdown(f"""<div class="tp-intel-card"><div class="tp-intel-title {news_color}">NEWS IMPACT</div>
           <div class="tp-intel-value">{news_level}</div><div class="tp-intel-detail">{news_warning}</div></div>""",
                     unsafe_allow_html=True)
-        if st.button("VIEW CALENDAR", use_container_width=True, key="cc_calendar"):
+        if st.button("VIEW CALENDAR", width="stretch", key="cc_calendar"):
             st.session_state.show_cc_calendar = not st.session_state.get("show_cc_calendar", False)
 
         st.markdown("""<div class="tp-intel-card"><div class="tp-intel-title">HISTORICAL WIN RATE</div>
@@ -2126,7 +2142,7 @@ with stats_tab:
                 dna_df = analyze_dna_performance()
                 if len(dna_df) > 0:
                     render_section("PATTERN MEMORY", "Trade DNA")
-                    st.dataframe(dna_df, use_container_width=True)
+                    st.dataframe(dna_df, width="stretch")
             except Exception:
                 pass
         else:
@@ -2189,7 +2205,7 @@ with backtest_tab:
             if st.button(
                 "RUN LEGACY BACKTEST",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 with st.spinner("Running backtest..."):
                     result = run_backtest(
@@ -2254,7 +2270,7 @@ with system_tab:
         )
         st.dataframe(
             versions_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -2292,7 +2308,7 @@ with system_tab:
             )
             st.dataframe(
                 db_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
     except Exception as exc:
@@ -2352,7 +2368,7 @@ with system_tab:
 
     st.dataframe(
         roadmap,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -2372,4 +2388,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
 
