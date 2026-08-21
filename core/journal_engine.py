@@ -86,7 +86,7 @@ def get_closed_trades():
     """Get only closed trades"""
     from database import get_connection
     conn = get_connection()
-    query = "SELECT * FROM trade_journal WHERE outcome != 'OPEN' ORDER BY timestamp DESC"
+    query = "SELECT * FROM trade_journal WHERE outcome IN ('WIN','LOSS','BREAKEVEN') ORDER BY timestamp DESC"
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df

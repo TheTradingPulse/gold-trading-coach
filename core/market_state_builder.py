@@ -118,6 +118,17 @@ def load_market_data(
 ) -> Optional[pd.DataFrame]:
 
     symbol = str(symbol).upper()
+
+    # V3.3G LIVE CANONICAL BOUNDARY:
+    # For live/dashboard requests, every futures market -- including GC -- is
+    # read directly from the same provider adapter.  Previously GC alone read
+    # from gold_ohlcv while Market Watch could read fresh GC=F, allowing a stale
+    # database candle to disagree materially with the chart/radar.
+    # Historical/replay GC requests retain the database path below; the replay
+    # bridge also replaces this loader with point-in-time frames during research.
+    if as_of is None:
+        return fetch_market_data(symbol, timeframe, limit=limit, as_of=None)
+
     if symbol != "GC":
         return fetch_market_data(symbol, timeframe, limit=limit, as_of=as_of)
 
