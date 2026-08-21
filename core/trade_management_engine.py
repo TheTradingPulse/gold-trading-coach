@@ -33,3 +33,4 @@ def build_management_plan(execution: Any, authorization: Any) -> ManagementPlan:
         ("Setup invalidates before entry.","Canonical risk authorization is revoked."),
         ("Targets remain structural.","No trailing stop is invented by the UI.","Broker adapter must confirm fills before state transitions.")
     )
+

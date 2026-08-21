@@ -39,3 +39,5 @@ def authorize_position(
         return RiskAuthorization(False,0,budget,0.0,rpc,"One contract exceeds the configured risk budget.")
     actual = contracts * rpc
     return RiskAuthorization(True,contracts,budget,actual,rpc,"Position fits the configured account risk budget.")
+
+

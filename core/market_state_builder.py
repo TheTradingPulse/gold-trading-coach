@@ -1,5 +1,5 @@
 """
-The Trading Pulse - Market State Builder V2.8A
+The Trading Pulse - Market State Builder V2.10E
 
 Authoritative deterministic market-state builder.
 
@@ -60,6 +60,7 @@ from instruments import get_instrument
 from market_clock import MarketClock, live_clock, replay_clock, normalize_timestamp
 from setup_fingerprint import build_setup_fingerprint
 from setup_candidate_engine import build_setup_candidates
+from data_integrity import evaluate_feed_status
 from market_state import (
     MarketState,
     ZoneState,
@@ -75,10 +76,12 @@ TIMEFRAMES = ["M", "W", "D", "4H", "1H", "15m", "5m", "1m"]
 
 CONTEXT_ZONE_TIMEFRAMES = ["D", "4H"]
 EXECUTION_ZONE_TIMEFRAMES = ["1H", "15m"]
+SCALP_ZONE_TIMEFRAMES = ["5m", "1m"]
 
 ALL_ZONE_TIMEFRAMES = (
     CONTEXT_ZONE_TIMEFRAMES
     + EXECUTION_ZONE_TIMEFRAMES
+    + SCALP_ZONE_TIMEFRAMES
 )
 
 TREND_WEIGHTS = {
@@ -97,6 +100,8 @@ ZONE_TIMEFRAME_WEIGHT = {
     "4H": 3,
     "1H": 2,
     "15m": 1,
+    "5m": 0.75,
+    "1m": 0.50,
 }
 
 
@@ -853,6 +858,26 @@ def build_market_state(
     state.confirmation = confirmation
     state.trade = trade
 
+    # V2.10E DATA-INTEGRITY BROKER GATE.
+    # Yahoo GC=F remains useful for education/research/planned levels, but delayed
+    # continuous/front-month data can never become executable/broker eligible.
+    feed_status = evaluate_feed_status(state.market_timestamp)
+    if not feed_status.execution_eligible:
+        if state.trade is not None or state.setup_state in ("TRADE_READY", "RISK_VALIDATING"):
+            state.warnings.append("Execution blocked by data-integrity gate: " + feed_status.reason)
+        state.trade = None
+        state.confirmation.risk_validated = False
+        state.confirmation.conditions_met = sum([
+            state.confirmation.price_in_zone,
+            state.confirmation.lower_timeframe_confirmed,
+            state.confirmation.structural_trigger,
+            state.confirmation.risk_validated,
+        ])
+        if "Execution-grade real-time feed required" not in state.confirmation.missing_conditions:
+            state.confirmation.missing_conditions.append("Execution-grade real-time feed required")
+        if state.setup_state in ("TRADE_READY", "RISK_VALIDATING"):
+            state.setup_state = "WATCHING"
+
     # V2.9B: one setup grade everywhere.  If a deterministic trade plan exists,
     # its displayed grade is the exact SetupCandidate grade for the selected zone,
     # not the older raw zone grade.
@@ -867,7 +892,8 @@ def build_market_state(
     # --------------------------------------------------------------
 
     state.professor_context = {
-        "architecture_version": "2.9B",
+        "architecture_version": "2.12",
+        "data_provenance": feed_status.to_dict(),
         "setup_fingerprint": build_setup_fingerprint(state, clock=clock),
         "market_clock": clock.to_dict(),
         "replay_guardrail": {
@@ -916,7 +942,8 @@ def build_market_state(
     }
 
     state.engine_versions = {
-        "market_state": "2.9B",
+        "market_state": "2.10E",
+        "data_integrity": "v2.10E",
         "setup_fingerprint": "v2.8B",
         "historical_replay": "v2.8C",
         "market_clock": "v2.8A",
@@ -925,7 +952,7 @@ def build_market_state(
         "zone_selector": "v2.5_hierarchical",
         "confirmation": "v2.7_evidence_engine",
         "trade_plan": "v2.7_structural_targets",
-        "setup_candidate": "v2.9B_zone_vs_setup_quality",
+        "setup_candidate": "v2.12_calibrated_quality_gates",
     }
 
     missing_timeframes = [
@@ -1146,3 +1173,7 @@ def print_market_state(
 if __name__ == "__main__":
     state = build_market_state("GC")
     print_market_state(state)
+
+############################################################
+
+

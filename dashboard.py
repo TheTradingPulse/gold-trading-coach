@@ -1,6 +1,6 @@
 """
 THE TRADING PULSE
-Gold Trading Coach V2.9C Dashboard
+Gold Trading Coach V2 FINAL CRITICAL CHART FIX Dashboard
 
 Rules:
 - MarketState is the single source of truth.
@@ -587,6 +587,7 @@ st.markdown(
     .tp-feed-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:7px; }}
     .tp-feed-dot.green {{ background:#35c76f; box-shadow:0 0 10px rgba(53,199,111,.35); }}
     .tp-feed-dot.red {{ background:#ff4d57; box-shadow:0 0 10px rgba(255,77,87,.35); }}
+    .tp-feed-dot.amber {{ background:#f59e0b; box-shadow:0 0 10px rgba(245,158,11,.35); }}
     .tp-feed-wrap {{ text-align:right; color:#9fa9b7; font-size:.68rem; padding-top:5px; }}
     div[data-testid="stMetric"] {{
         background:linear-gradient(145deg,#10161f,#0a0f16);
@@ -708,7 +709,52 @@ st.markdown(
         .tp-status-cell {{ border-bottom:1px solid #2b3440; }}
     }}
 
-    </style>
+    
+    .tp-hero-card {{background:linear-gradient(110deg,#101720 0%,#1d1118 100%);border:1px solid #2a3441;border-radius:14px;padding:18px 20px;min-height:112px;}}
+    .tp-hero-kicker {{color:#ff4b55;font-size:.66rem;font-weight:900;letter-spacing:.18em;margin-bottom:5px;}}
+    .tp-hero-title {{color:#f7f8fa;font-size:2rem;font-weight:950;line-height:1.05;}}
+    .tp-hero-tagline {{color:#f0f2f5;font-size:.90rem;margin-top:8px;}}
+    .tp-hero-sub {{color:#9aa6b5;font-size:.72rem;margin-top:5px;letter-spacing:.06em;}}
+    .tp-mini-card {{background:#0f151d;border:1px solid #2b3745;border-radius:14px;padding:18px 16px;min-height:112px;}}
+    .tp-mini-label {{color:#aeb8c6;font-size:.72rem;letter-spacing:.08em;}}
+    .tp-mini-value {{color:#d7deea;font-size:1.55rem;font-weight:900;margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+
+    /* V2 FINAL WHITE-GLOVE LAYOUT POLISH - layout only */
+    .block-container {{ max-width:1760px !important; padding:1.05rem 1.15rem 2.5rem !important; }}
+    .tp-hero-card {{ min-height:96px !important; padding:15px 20px !important; border-radius:10px !important; }}
+    .tp-hero-title {{ font-size:1.72rem !important; }}
+    .tp-hero-tagline {{ margin-top:6px !important; font-size:.82rem !important; }}
+    .tp-hero-sub {{ font-size:.64rem !important; }}
+    .tp-status-grid {{ margin:10px 0 8px !important; border-radius:8px !important; }}
+    .tp-status-cell {{ min-height:98px !important; padding:14px 16px 12px !important; }}
+    .tp-status-value {{ font-size:1.18rem !important; margin-top:9px !important; }}
+    .tp-status-sub {{ margin-top:7px !important; font-size:.66rem !important; }}
+    .tp-mtf-big {{ font-size:1.28rem !important; margin-top:6px !important; }}
+    .tp-mini-bars {{ height:28px !important; margin-top:5px !important; }}
+    .tp-mini-bars span {{ width:13px !important; }}
+    .tp-market-watch-wrap {{ margin:8px 0 12px !important; padding:9px 10px 10px !important; }}
+    .tp-market-card {{ padding:8px !important; }}
+    .tp-market-price {{ font-size:.82rem !important; }}
+    .tp-chart-head {{ padding:10px 13px !important; }}
+    .tp-intel-card {{ padding:12px 13px !important; margin-bottom:9px !important; min-height:0 !important; }}
+    .tp-intel-value {{ font-size:.98rem !important; margin-top:7px !important; }}
+    .tp-intel-detail {{ font-size:.64rem !important; margin-top:5px !important; }}
+    div[data-testid="stMetric"] {{ padding:10px 12px !important; }}
+    div[data-testid="stMetricValue"] {{ font-size:1.30rem !important; }}
+    div[data-testid="stVerticalBlock"] {{ gap:.65rem; }}
+    .tp-radar-card {{
+        border:1px solid rgba(215,180,90,.34);
+        background:linear-gradient(90deg,rgba(215,180,90,.10),rgba(13,17,24,.82));
+        border-radius:8px;padding:10px 13px;margin:6px 0 12px;
+        display:flex;justify-content:space-between;gap:18px;align-items:center;
+    }}
+    .tp-radar-main {{ color:#f4f6f9;font-size:.76rem;font-weight:800; }}
+    .tp-radar-sub {{ color:#8f9aaa;font-size:.62rem;margin-top:3px; }}
+    .tp-radar-count {{ color:#d7b45a;font-size:.72rem;font-weight:900;white-space:nowrap; }}
+    .tp-section-rule {{ border-top:1px solid rgba(255,255,255,.06);margin:10px 0 8px; }}
+    @media (max-width:1200px) {{ .tp-status-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; }} }}
+
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -738,6 +784,12 @@ def money(value):
 def points(value):
     value = safe_float(value)
     return "--" if value is None else f"{value:,.2f} pts"
+
+
+def score10(value):
+    """Convert the deterministic 0-100 setup score to the trader-facing 0-10 scale."""
+    value = safe_float(value)
+    return "--" if value is None else f"{value / 10.0:.1f}/10"
 
 
 def trend_label(trend):
@@ -782,6 +834,7 @@ def zone_dict(zone):
 
 
 def data_health(timestamp_value):
+    """Yahoo is a delayed/reference feed, so never label it exchange-real-time LIVE."""
     if timestamp_value is None:
         return "DISCONNECTED", None
     try:
@@ -791,10 +844,10 @@ def data_health(timestamp_value):
         now = pd.Timestamp.now(tz="UTC")
         age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
         if age_minutes <= 45:
-            return "CONNECTED", age_minutes
+            return "DELAYED", age_minutes
         return "STALE", age_minutes
     except Exception:
-        return "UNKNOWN", None
+        return "DISCONNECTED", None
 
 
 def get_news_state():
@@ -810,33 +863,14 @@ def get_market_watch():
     return fetch_market_watch(MARKET_WATCH_ORDER)
 
 
-def _sparkline_svg(values, positive=True):
-    values = [safe_float(v) for v in (values or [])]
-    values = [v for v in values if v is not None]
-    if len(values) < 2:
-        return ""
-    lo, hi = min(values), max(values)
-    span = max(hi - lo, 1e-9)
-    pts = []
-    for i, value in enumerate(values[-24:]):
-        x = i / max(len(values[-24:]) - 1, 1) * 100
-        y = 13 - ((value - lo) / span * 11)
-        pts.append(f"{x:.1f},{y:.1f}")
-    stroke = "#22c55e" if positive else "#ef4444"
-    return (
-        '<svg class="tp-market-spark" viewBox="0 0 100 15" preserveAspectRatio="none">'
-        f'<polyline points="{" ".join(pts)}" fill="none" stroke="{stroke}" '
-        'stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg>'
-    )
-
-
 def render_market_watch(cards):
+    """Compact scanner: price/change only. Tiny sparklines were removed as non-decision-useful."""
     cards = cards or {}
     html = [
         '<div class="tp-market-watch-wrap">',
         '<div class="tp-market-watch-head">',
         '<div class="tp-market-watch-title">MARKET WATCH</div>',
-        '<div class="tp-market-watch-sub">Yahoo Finance futures snapshot / GC Command Center active</div>',
+        '<div class="tp-market-watch-sub">Yahoo reference snapshot / GC Command Center active</div>',
         '</div>',
         '<div class="tp-market-grid">',
     ]
@@ -850,8 +884,7 @@ def render_market_watch(cards):
         active = " active" if symbol == "GC" else ""
         dot_cls = "up" if change > 0 else "down" if change < 0 else ""
         price_text = "--" if price is None else f"{price:,.2f}"
-        change_text = "--" if price is None else f"{change:+,.2f}  ({pct:+.2f}%)"
-        spark = _sparkline_svg(item.get("sparkline"), positive=change >= 0)
+        change_text = "--" if price is None else f"{change:+,.2f} ({pct:+.2f}%)"
         html.extend([
             f'<div class="tp-market-card{active}" title="{symbol} / {meta_name}">',
             '<div class="tp-market-top">',
@@ -861,16 +894,14 @@ def render_market_watch(cards):
             f'<div class="tp-market-name">{meta_name}</div>',
             f'<div class="tp-market-price">{price_text}</div>',
             f'<div class="tp-market-change {direction}">{change_text}</div>',
-            spark,
             '</div>',
         ])
     html.extend([
         '</div>',
-        '<div class="tp-market-note">GC has full Trading Pulse analysis. The other seven are watch-feed only until their deterministic engines and storage are validated.</div>',
+        '<div class="tp-market-note">Scanner only: price and session change. GC has full Trading Pulse analysis; other symbols remain watch-only until their deterministic engines are validated.</div>',
         '</div>',
     ])
     st.markdown("".join(html), unsafe_allow_html=True)
-
 
 def resample_30m(df):
     if df is None or len(df) == 0:
@@ -1003,6 +1034,65 @@ def render_zone_card(title, zone, role, variant=""):
     )
 
 
+def projected_targets_for_candidate(candidate, state, limit=2):
+    """Return conservative structural target edges for a potential setup.
+
+    These are planning levels only. Canonical TradeState remains the only source
+    of executable targets after confirmation and risk validation.
+    """
+    if candidate is None:
+        return []
+    entry = safe_float(getattr(candidate, "projected_entry", None))
+    if entry is None:
+        return []
+    rows = []
+    if str(candidate.zone_type).lower() == "demand":
+        for zone in (getattr(state, "supply_zones", None) or []):
+            price = safe_float(getattr(zone, "lower_bound", None))
+            if price is not None and price > entry:
+                rows.append(price)
+        rows.sort()
+    else:
+        for zone in (getattr(state, "demand_zones", None) or []):
+            price = safe_float(getattr(zone, "upper_bound", None))
+            if price is not None and price < entry:
+                rows.append(price)
+        rows.sort(reverse=True)
+    deduped = []
+    for price in rows:
+        if not deduped or abs(price - deduped[-1]) > max(abs(entry) * 0.0005, 0.5):
+            deduped.append(price)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def planned_trade_metrics(candidate, market_state):
+    """Display-only planning math for GC. Never changes TRADE_READY or broker eligibility."""
+    entry = safe_float(getattr(candidate, "projected_entry", None))
+    stop = safe_float(getattr(candidate, "projected_stop", None))
+    targets = projected_targets_for_candidate(candidate, market_state, limit=2)
+    t1 = safe_float(targets[0]) if len(targets) > 0 else None
+    t2 = safe_float(targets[1]) if len(targets) > 1 else None
+    if entry is None or stop is None:
+        return {"entry": entry, "stop": stop, "t1": t1, "t2": t2}
+    point_risk = abs(entry - stop)
+    # GC standard COMEX contract = $100 per 1.00 price point.
+    dollars_per_point = 100.0
+    risk_dollars = point_risk * dollars_per_point
+    def rr_and_return(target):
+        if target is None or point_risk <= 0:
+            return None, None
+        reward_points = abs(target - entry)
+        return reward_points / point_risk, reward_points * dollars_per_point
+    rr1, ret1 = rr_and_return(t1)
+    rr2, ret2 = rr_and_return(t2)
+    return {
+        "entry": entry, "stop": stop, "t1": t1, "t2": t2,
+        "risk_points": point_risk, "risk_dollars": risk_dollars,
+        "rr1": rr1, "rr2": rr2, "return1": ret1, "return2": ret2,
+    }
+
 # ---------------------------------------------------------------------
 # CHART
 # ---------------------------------------------------------------------
@@ -1028,6 +1118,7 @@ def build_candlestick_chart(
     show_grade_a=True,
     show_grade_b=True,
     show_grade_c=False,
+    focused_candidate_id=None,
 ):
     if df is None or len(df) < 2:
         return None
@@ -1052,12 +1143,13 @@ def build_candlestick_chart(
     y_min = price_min - price_range * 0.05
     y_max = price_max + price_range * 0.05
 
-    x_enc = alt.X("timestamp:T", axis=alt.Axis(
-        title=None, format="%b %d", labelAngle=0, labelOverlap=True,
-        labelColor=MUTED, tickColor=BORDER, domainColor=BORDER))
+    # Reference-feed timestamps can be delayed/misaligned. Hide the time axis in V2.
+    # A broker/exchange live chart will replace this visual layer in V3.
+    x_enc = alt.X("timestamp:T", axis=None)
     y_enc = alt.Y("low:Q", scale=alt.Scale(domain=[y_min, y_max], zero=False),
-        axis=alt.Axis(title=None, orient="right", labelColor=MUTED,
-                      tickColor=BORDER, domainColor=BORDER, format=",.2f"))
+        axis=alt.Axis(title="PRICE", orient="right", labelColor="#c9d2df", titleColor="#8f9baa",
+                      tickColor=BORDER, domainColor=BORDER, format="$,.2f", grid=True, gridColor="#18212c",
+                      gridOpacity=.45, tickCount=8))
     colors = alt.Scale(domain=["Up", "Down"], range=[GREEN, RED])
     base = alt.Chart(data).encode(x=x_enc)
     wicks = base.mark_rule(strokeWidth=1.0).encode(
@@ -1072,7 +1164,7 @@ def build_candlestick_chart(
                  alt.Tooltip("close:Q", title="Close", format=",.2f")])
     chart = wicks + bodies
 
-    # V2.9B: chart grades are SETUP grades from the canonical Setup Candidate Engine.
+    # V2.12: chart grades are SETUP grades from the canonical Setup Candidate Engine.
     # One grading brain now drives BOTH the chart and candidate intelligence.
     grade_switches = {
         "A+": show_grade_aplus,
@@ -1090,16 +1182,11 @@ def build_candlestick_chart(
     execution_zone = get_execution_zone(state)
     conflict_zone = get_conflict_zone(state)
 
+    # V2.10D: the chart shows setups belonging to the ACTIVE timeframe only.
+    # This prevents a 5m chart from being covered by 1H/4H/D candidate labels.
     tf_map = {"1D": "D", "1W": "W"}
     active_tf = tf_map.get(timeframe_label, timeframe_label)
-    if active_tf in ("1m", "5m", "15m", "30m", "1H"):
-        relevant_tfs = {active_tf, "1H", "4H", "D"}
-    elif active_tf == "4H":
-        relevant_tfs = {"4H", "D"}
-    elif active_tf in ("D", "W"):
-        relevant_tfs = {"D"}
-    else:
-        relevant_tfs = {active_tf}
+    relevant_tfs = {active_tf}
 
     all_candidates = build_setup_candidates(state)
     visible_candidates = filter_candidates(
@@ -1107,10 +1194,17 @@ def build_candlestick_chart(
         minimum_grade=min_zone_grade,
         enabled_grades=grade_switches,
         relevant_timeframes=relevant_tfs,
-        limit=6,
+        limit=12,
     )
 
-    for candidate in visible_candidates:
+    # V2 FINAL CRITICAL UX: the chart opens clean. Candidate overlays appear ONLY
+    # after the user explicitly selects a setup. Never auto-pick the first setup.
+    if focused_candidate_id:
+        display_candidates = [c for c in visible_candidates if c.candidate_id == focused_candidate_id]
+    else:
+        display_candidates = []
+
+    for candidate in display_candidates:
         zone_rows.append({
             "lower": candidate.lower_bound,
             "upper": candidate.upper_bound,
@@ -1120,7 +1214,7 @@ def build_candlestick_chart(
             "setup_score": candidate.setup_score,
             "distance": candidate.distance_percent,
             "timeframe": candidate.timeframe,
-            "candidate_label": f"{candidate.grade} SETUP / {candidate.zone_grade} ZONE / {candidate.timeframe} {candidate.zone_type.upper()} / {candidate.lifecycle}",
+            "candidate_label": f"{candidate.setup_score / 10.0:.1f}/10 SETUP / {candidate.timeframe} {candidate.zone_type.upper()} / {candidate.lifecycle}",
         })
 
     # Canonical MarketState overlays remain separate and OFF by default.
@@ -1167,9 +1261,9 @@ def build_candlestick_chart(
                      alt.Tooltip("zone_grade:N",title="Zone Grade"),
                      alt.Tooltip("lower:Q",title="Low",format=",.2f"),
                      alt.Tooltip("upper:Q",title="High",format=",.2f")])
-        chart = zone_layer + chart
+        chart = chart + zone_layer
 
-        # Label potential zones with the SAME V2.9A grade/lifecycle used by the filter.
+        # Label potential zones with the SAME V2.12 grade/lifecycle used by the filter.
         label_rows = [r for r in zone_rows if r.get("candidate_label")]
         if label_rows:
             last_ts = data["timestamp"].max()
@@ -1231,6 +1325,34 @@ def build_candlestick_chart(
             color="#35c76f", opacity=.45, strokeDash=[2,2], strokeWidth=.7).encode(
             y=alt.Y("price:Q",scale=alt.Scale(domain=[y_min,y_max],zero=False),axis=None))
 
+    # V2.10B: show the best visible candidate's PLANNED entry/stop/targets.
+    # These lines are informational planning levels, never broker/order intent.
+    if focused_candidate_id and display_candidates:
+        planned_candidate = display_candidates[0]
+        planned_targets = projected_targets_for_candidate(planned_candidate, state, limit=2)
+        planned_rows = []
+        if planned_candidate.projected_entry is not None:
+            planned_rows.append({"price": float(planned_candidate.projected_entry), "label": f"PLANNED ENTRY {float(planned_candidate.projected_entry):,.2f}", "kind": "ENTRY"})
+        if planned_candidate.projected_stop is not None:
+            planned_rows.append({"price": float(planned_candidate.projected_stop), "label": f"PLANNED STOP {float(planned_candidate.projected_stop):,.2f}", "kind": "STOP"})
+        for idx, target_price in enumerate(planned_targets, start=1):
+            planned_rows.append({"price": float(target_price), "label": f"PLANNED T{idx} {float(target_price):,.2f}", "kind": "TARGET"})
+        if planned_rows and str(getattr(state, "setup_state", "")).upper() != "TRADE_READY":
+            pdf = pd.DataFrame(planned_rows)
+            planned_rules = alt.Chart(pdf).mark_rule(strokeWidth=1.05, opacity=.72, strokeDash=[4,4]).encode(
+                y=alt.Y("price:Q", scale=alt.Scale(domain=[y_min,y_max],zero=False), axis=None),
+                color=alt.Color("kind:N", scale=alt.Scale(domain=["ENTRY","STOP","TARGET"], range=["#f0d98a","#ef4444","#35c76f"]), legend=None),
+            )
+            last_ts = data["timestamp"].max()
+            pldf = pdf.copy(); pldf["timestamp"] = last_ts
+            planned_labels = alt.Chart(pldf).mark_text(align="right", dx=-8, dy=-6, fontSize=9, fontWeight="bold", opacity=.86).encode(
+                x=alt.X("timestamp:T", axis=None),
+                y=alt.Y("price:Q", scale=alt.Scale(domain=[y_min,y_max],zero=False), axis=None),
+                text="label:N",
+                color=alt.Color("kind:N", scale=alt.Scale(domain=["ENTRY","STOP","TARGET"], range=["#f0d98a","#ef4444","#35c76f"]), legend=None),
+            )
+            chart = chart + planned_rules + planned_labels
+
     # V2.9C: exact execution levels appear ONLY for canonical TRADE_READY.
     # This deliberately adds no lines for potential/armed/confirming candidates.
     trade = getattr(state, "trade", None)
@@ -1289,10 +1411,10 @@ def build_candlestick_chart(
             x=x_enc, y=alt.Y("volume:Q", axis=None), color=alt.value("#64748b"))
         chart = alt.layer(chart, volume.resolve_scale(y="independent"))
 
-    return (chart.properties(height=505, background=PANEL)
+    return (chart.properties(height=650, background=PANEL)
         .interactive()
         .configure_view(strokeOpacity=0)
-        .configure_axis(gridColor="#28313d", gridOpacity=.18, labelFontSize=10))
+        .configure_axis(gridColor="#28313d", gridOpacity=.22, labelFontSize=11, titleFontSize=11))
 
 
 # ---------------------------------------------------------------------
@@ -1341,7 +1463,7 @@ def render_setup_validation(state):
         st.markdown(f"**{prefix}** {label}")
 
     if get_conflict_zone(state):
-        st.error("CONFLICT: opposing tactical zone is active.")
+        st.error("Price is inside opposing supply/demand structure.")
 
 
 def render_watch_plan(state):
@@ -1358,7 +1480,7 @@ def render_watch_plan(state):
 
     if execution:
         st.markdown(
-            f"**Execution:** {execution.get('timeframe', '--')} "
+            f"**Trade Zone:** {execution.get('timeframe', '--')} "
             f"{str(execution.get('type', '')).upper()} "
             f"{money(execution.get('lower_bound'))} - "
             f"{money(execution.get('upper_bound'))}"
@@ -1479,7 +1601,7 @@ news_warning, news_level = get_news_state()
 # HEADER - BRANDED PRODUCTION BAR
 # ---------------------------------------------------------------------
 
-header_logo, header_title, header_price, header_feed = st.columns([1.65, 4.15, 1.0, 1.05], gap="small")
+header_logo, header_title = st.columns([1.35, 5.65], gap="medium")
 with header_logo:
     if BRAND_LOGO.exists():
         st.image(str(BRAND_LOGO), use_container_width=True)
@@ -1488,23 +1610,12 @@ with header_logo:
 
 with header_title:
     st.markdown(
-        f"""<div style="padding:5px 0 4px">
-        <div class="tp-coach-name">{COACH_NAME}</div>
-        <div class="tp-coach-sub">{DISPLAY_SYMBOL} / {MARKET_NAME} / FRONT-MONTH</div>
+        f"""<div class="tp-hero-card">
+        <div class="tp-hero-kicker">AI ASSISTED FUTURES TRADING</div>
+        <div class="tp-hero-title">{COACH_NAME}</div>
+        <div class="tp-hero-tagline">Stop Chasing Trades. Let the Market Come to You.</div>
+        <div class="tp-hero-sub">SUPPLY • DEMAND • STRUCTURE • EXECUTION</div>
         </div>""",
-        unsafe_allow_html=True,
-    )
-
-with header_price:
-    st.markdown(
-        f"<div style='text-align:right;color:#f5f7fa;font-size:1.05rem;font-weight:900;padding-top:12px'>{money(market_state.current_price)}</div>",
-        unsafe_allow_html=True,
-    )
-
-with header_feed:
-    feed_class = "green" if health == "CONNECTED" else "red"
-    st.markdown(
-        f"<div class='tp-feed-wrap' style='padding-top:14px'><span class='tp-feed-dot {feed_class}'></span>DATA FEED</div>",
         unsafe_allow_html=True,
     )
 
@@ -1555,7 +1666,7 @@ with dashboard_tab:
     </div>
     """, unsafe_allow_html=True)
 
-    st.caption("MTF alignment is directional context only. Trade Ready still requires the full deterministic MarketState confirmation and risk rules.")
+    st.caption("Multi-timeframe alignment is context only; Trade Ready still requires confirmation and risk validation.")
 
     # Cross-market watch strip. GC is the active full-analysis market.
     try:
@@ -1563,6 +1674,40 @@ with dashboard_tab:
     except Exception:
         market_watch = {}
     render_market_watch(market_watch)
+
+    # V2.12 HIGH-PRIORITY RADAR.
+    # This is deliberately separate from the active chart so a strong setup on
+    # another timeframe cannot disappear simply because the trader is viewing 5m.
+    candidates_212 = build_setup_candidates(market_state)
+    priority_candidates = [
+        c for c in candidates_212
+        if c.setup_score >= 90.0
+        and c.lifecycle in ("APPROACHING", "IN_ZONE", "QUALIFIED")
+    ]
+    priority_candidates.sort(key=lambda c: (-c.setup_score, c.distance_percent))
+
+    if priority_candidates:
+        p = priority_candidates[0]
+        p_side = "LONG" if p.zone_type == "demand" else "SHORT"
+        st.markdown(
+            f"""<div class="tp-radar-card">
+              <div>
+                <div class="tp-radar-main">HIGH-PRIORITY RADAR &nbsp; | &nbsp; {p_side} {DISPLAY_SYMBOL} &nbsp; | &nbsp; {score10(p.setup_score)} &nbsp; | &nbsp; {p.timeframe} {p.zone_type.upper()} &nbsp; | &nbsp; {p.lifecycle.replace('_',' ')}</div>
+                <div class="tp-radar-sub">Zone {money(p.lower_bound)} - {money(p.upper_bound)} &nbsp; | &nbsp; Distance {p.distance_points:.2f} pts &nbsp; | &nbsp; Independent of the active chart timeframe</div>
+              </div>
+              <div class="tp-radar-count">{len(priority_candidates)} ELITE SETUP{'S' if len(priority_candidates) != 1 else ''}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """<div class="tp-radar-card">
+              <div><div class="tp-radar-main">HIGH-PRIORITY RADAR</div>
+              <div class="tp-radar-sub">No GC setup currently meets the 9.0/10 approaching/in-zone threshold.</div></div>
+              <div class="tp-radar-count">CLEAR</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
     # Put chart timeframe controls immediately above the chart workspace.
     st.markdown(
@@ -1580,50 +1725,59 @@ with dashboard_tab:
             key=f"tf_{display_tf}",
         ):
             st.session_state.chart_tf = display_tf
+            st.session_state.focused_candidate_id = None
+            st.session_state.pop("focused_setup_selector", None)
             st.rerun()
 
     selected_tf = st.session_state.chart_tf
-    chart_col, intel_col, toolkit_col = st.columns([4.25, 1.35, 1.55], gap="small")
 
-    with toolkit_col:
-        with st.expander("TRADER TOOLKIT / CHART LAYERS", expanded=True):
-            st.markdown("**POTENTIAL TRADE QUALITY**")
-            st.session_state.zone_quality = st.selectbox(
-                "Minimum Acceptable Grade",
-                ["A+","A","B","C","ALL"],
-                index=["A+","A","B","C","ALL"].index(st.session_state.zone_quality)
-                    if st.session_state.zone_quality in ["A+","A","B","C","ALL"] else 2,
-                help="Display-only learning filter. It shows developing supply/demand structure by quality without changing Trade Ready or MarketState.")
+    # Load active timeframe data once; OHLC metrics render directly beneath the chart.
+    try:
+        chart_df = get_chart_data(selected_tf, 260)
+    except Exception:
+        chart_df = None
 
-            st.caption("Potential structure visible on chart. These are NOT trade signals.")
-            st.checkbox("A+ Zones (Highest Quality)", key="zone_grade_aplus")
-            st.checkbox("A Zones (Good Quality)", key="zone_grade_a")
-            st.checkbox("B Zones (Developing)", key="zone_grade_b")
-            st.checkbox("C Zones (Weak / Potential)", key="zone_grade_c")
+    # V2.10D: the active chart, opportunity panel and trade setup panel all use
+    # the SAME active-timeframe candidate set.
+    enabled_29a = {
+        "A+": st.session_state.zone_grade_aplus,
+        "A": st.session_state.zone_grade_a,
+        "B": st.session_state.zone_grade_b,
+        "C": st.session_state.zone_grade_c,
+        "D": False,
+    }
+    candidate_tf = {"1D": "D", "1W": "W"}.get(selected_tf, selected_tf)
+    visible_29a = filter_candidates(
+        candidates_212,
+        minimum_grade=st.session_state.zone_quality,
+        enabled_grades=enabled_29a,
+        relevant_timeframes={candidate_tf},
+        limit=12,
+    )
 
-            st.caption("MarketState zones (OFF by default)")
-            st.checkbox("HTF Context Zone", key="layer_context")
-            st.checkbox("Execution Zone", key="layer_execution")
-            st.checkbox("Active Conflict", key="layer_conflict")
-            st.divider()
-            st.markdown("**CHART LAYERS**")
-            st.checkbox("SMA 20", key="layer_sma20")
-            st.checkbox("SMA 50", key="layer_sma50")
-            st.checkbox("SMA 200", key="layer_sma200")
-            st.checkbox("EMA 9", key="layer_ema9")
-            st.checkbox("EMA 21", key="layer_ema21")
-            st.checkbox("VWAP", key="layer_vwap")
-            st.checkbox("Previous Day High / Low", key="layer_prev_day")
-            st.checkbox("Previous Week High / Low", key="layer_prev_week")
-            st.checkbox("Volume", key="layer_volume")
-            st.caption("Market sessions and swing-structure overlays are reserved for the next chart-engine pass.")
+    # Resolve the selected setup BEFORE chart rendering. This makes setup
+    # buttons persistent across reruns and drives the chart overlay correctly.
+    focused_candidate = None
+    selected_key = f"selected_setup_{selected_tf}"
+    if visible_29a:
+        selected_index = int(st.session_state.get(selected_key, 0) or 0)
+        selected_index = min(max(selected_index, 0), len(visible_29a) - 1)
+        focused_candidate = visible_29a[selected_index]
+        st.session_state.focused_candidate_id = focused_candidate.candidate_id
+    else:
+        st.session_state.focused_candidate_id = None
+
+    # Primary visual gets the full page width.
+    chart_col = st.container()
 
     with chart_col:
+        chart_price = safe_float(chart_df["close"].iloc[-1]) if chart_df is not None and len(chart_df) else safe_float(market_state.current_price)
         st.markdown(
-            f'<div class="tp-chart-head">{DISPLAY_SYMBOL} / {MARKET_NAME} &nbsp;&bull;&nbsp; {selected_tf}</div>',
+            f'<div class="tp-chart-head" style="display:flex;justify-content:space-between;align-items:end">'
+            f'<span>{DISPLAY_SYMBOL} / {MARKET_NAME} &nbsp;&bull;&nbsp; TIMEFRAME <b>{selected_tf}</b></span>'
+            f'<span style="font-size:1.20rem">LAST {money(chart_price)}</span></div>',
             unsafe_allow_html=True)
         try:
-            chart_df = get_chart_data(selected_tf, 260)
             if chart_df is not None and len(chart_df) >= 5:
                 chart = build_candlestick_chart(
                     chart_df, selected_tf, market_state,
@@ -1631,6 +1785,7 @@ with dashboard_tab:
                     show_context=st.session_state.layer_context,
                     show_execution=st.session_state.layer_execution,
                     show_conflict=st.session_state.layer_conflict,
+                    focused_candidate_id=st.session_state.get("focused_candidate_id"),
                     show_sma20=st.session_state.layer_sma20,
                     show_sma50=st.session_state.layer_sma50,
                     show_sma200=st.session_state.layer_sma200,
@@ -1648,13 +1803,6 @@ with dashboard_tab:
                 if chart is not None:
                     st.altair_chart(chart, use_container_width=True)
 
-                last_candle = chart_df.iloc[-1]
-                o1,o2,o3,o4 = st.columns(4)
-                o1.metric("OPEN", money(last_candle["open"]))
-                o2.metric("HIGH", money(last_candle["high"]))
-                o3.metric("LOW", money(last_candle["low"]))
-                o4.metric("CLOSE", money(last_candle["close"]))
-
                 note = f"{len(chart_df):,} candles / Minimum potential grade {st.session_state.zone_quality}"
                 if selected_tf == "30m":
                     note += " / 30m resampled from 15m"
@@ -1665,88 +1813,132 @@ with dashboard_tab:
         except Exception as exc:
             st.error(f"Chart error: {exc}")
 
-    with intel_col:
-        # V2.9A candidate intelligence uses the exact same grades shown on chart.
-        candidates_29a = build_setup_candidates(market_state)
-        enabled_29a = {
-            "A+": st.session_state.zone_grade_aplus,
-            "A": st.session_state.zone_grade_a,
-            "B": st.session_state.zone_grade_b,
-            "C": st.session_state.zone_grade_c,
-            "D": False,
-        }
-        visible_29a = filter_candidates(
-            candidates_29a,
-            minimum_grade=st.session_state.zone_quality,
-            enabled_grades=enabled_29a,
-            limit=6,
-        )
-        st.markdown("**SETUP CANDIDATES / V2.9C**")
-        counts = {g: sum(c.grade == g for c in candidates_29a) for g in ("A+", "A", "B", "C")}
-        st.caption(
-            f"Detected {len(candidates_29a)} / Visible {len(visible_29a)} | "
-            f"A+ {counts['A+']} / A {counts['A']} / B {counts['B']} / C {counts['C']}"
-        )
-        if visible_29a:
-            best = visible_29a[0]
-            st.markdown(
-                f"**{best.grade} {best.timeframe} {best.zone_type.upper()}**  "
-                f"{money(best.lower_bound)} - {money(best.upper_bound)}"
-            )
-            best_execution = build_execution_lifecycle(market_state, best)
-            st.caption(
-                f"Setup {best.grade} {best.setup_score:.1f}/100 / Zone {best.zone_grade} {best.zone_quality_score:.1f}/100 / "
-                f"{best_execution.stage} / Distance {best.distance_points:.2f} pts ({best.distance_percent:.3f}%)"
-            )
-            if best_execution.trade_ready:
-                st.success(
-                    f"TRADE READY / {best_execution.direction} / Entry {money(best_execution.entry)} / "
-                    f"Stop {money(best_execution.stop)} / Grade {best_execution.setup_grade}"
-                )
-            elif best_execution.stage in ("ARMED", "CONFIRMING", "RISK_VALIDATING"):
-                st.warning(f"{best_execution.stage.replace('_',' ')} / {best_execution.reason}")
-            else:
-                st.info(f"{best_execution.stage.replace('_',' ')} / {best_execution.reason}")
-            with st.expander("Why this candidate has this grade"):
-                for reason in best.reasons:
-                    st.write(f"- {reason}")
-                st.caption("Setup grade combines zone quality + timing/context. It is not win probability and cannot make Trade Ready true.")
-            with st.expander("Structural planning preview", expanded=False):
-                st.caption("STRUCTURAL PREVIEW ONLY — not an order. Exact entry/stop/targets unlock only when canonical status becomes TRADE READY.")
-                p1,p2,p3 = st.columns(3)
-                p1.metric("ZONE ENTRY", money(best.projected_entry))
-                p2.metric("INVALIDATION", money(best.projected_stop))
-                p3.metric("FIRST STRUCTURE", money(best.projected_target))
-                if best.projected_rr is not None:
-                    st.caption(f"Preview room: {best.projected_rr:.2f}R to nearest opposing structure. Trade Ready still controls execution.")
-        else:
-            st.caption("No candidates survive the current grade switches/filter.")
+        if chart_df is not None and len(chart_df) >= 1:
+            last_candle = chart_df.iloc[-1]
+            o1,o2,o3,o4 = st.columns(4)
+            o1.metric("OPEN", money(last_candle["open"]))
+            o2.metric("HIGH", money(last_candle["high"]))
+            o3.metric("LOW", money(last_candle["low"]))
+            o4.metric("CLOSE", money(last_candle["close"]))
 
+        st.markdown('<div class="tp-section-rule"></div>', unsafe_allow_html=True)
+
+        # V2.10F: quick setup picker. Every visible active-timeframe setup can be
+        # selected directly; the full educational plan below follows that selection.
+        st.markdown("### SELECT A SETUP")
+        if visible_29a:
+            current_key = f"selected_setup_{selected_tf}"
+            current_index = int(st.session_state.get(current_key, 0) or 0)
+            current_index = min(max(current_index, 0), len(visible_29a) - 1)
+            quick_cols = st.columns(min(4, len(visible_29a)))
+            for i, candidate in enumerate(visible_29a):
+                side_short = "L" if candidate.zone_type == "demand" else "S"
+                label = f"{score10(candidate.setup_score)}  |  {side_short}  |  {candidate.lifecycle.replace('_', ' ')}"
+                if quick_cols[i % len(quick_cols)].button(
+                    label,
+                    key=f"quick_setup_{selected_tf}_{i}",
+                    use_container_width=True,
+                    type="primary" if i == current_index else "secondary",
+                ):
+                    st.session_state[current_key] = i
+                    st.session_state[f"setup_dropdown_{selected_tf}"] = i
+                    st.session_state.focused_candidate_id = candidate.candidate_id
+                    st.rerun()
+        else:
+            st.caption(f"No {selected_tf} setups survive the current quality filter.")
+
+        st.markdown("### TRADE SETUP")
+        if visible_29a:
+            setup_labels = [
+                (
+                    f"{score10(c.setup_score)}  |  "
+                    f"{'LONG' if c.zone_type == 'demand' else 'SHORT'}  |  "
+                    f"{c.timeframe} {c.zone_type.upper()}  |  "
+                    f"{money(c.lower_bound)} - {money(c.upper_bound)}  |  "
+                    f"{c.lifecycle.replace('_', ' ')}"
+                )
+                for c in visible_29a
+            ]
+            selected_key = f"selected_setup_{selected_tf}"
+            selected_default = int(st.session_state.get(selected_key, 0) or 0)
+            selected_default = min(max(selected_default, 0), len(visible_29a) - 1)
+            selected_setup_index = st.selectbox(
+                f"{selected_tf} supply/demand setups",
+                options=list(range(len(visible_29a))),
+                index=selected_default,
+                format_func=lambda i: setup_labels[i],
+                key=f"setup_dropdown_{selected_tf}",
+                help="Choose any visible setup to load its planned entry, stop and structural targets below.",
+            )
+            if selected_setup_index != selected_default:
+                st.session_state[selected_key] = selected_setup_index
+                st.session_state.focused_candidate_id = visible_29a[selected_setup_index].candidate_id
+                st.rerun()
+            setup = visible_29a[selected_setup_index]
+            lifecycle = build_execution_lifecycle(market_state, setup)
+            plan = planned_trade_metrics(setup, market_state)
+            side = "LONG" if setup.zone_type == "demand" else "SHORT"
+            status = lifecycle.stage.replace("_", " ")
+            st.markdown(
+                f"**{side} {DISPLAY_SYMBOL}  |  {score10(setup.setup_score)} SETUP  |  {setup.timeframe} {setup.zone_type.upper()}  |  {status}**"
+            )
+            st.caption(
+                "Planned trade levels for the selected opportunity. They are informational until the canonical execution lifecycle reaches TRADE READY."
+            )
+            a,b,c,d = st.columns(4)
+            a.metric("ENTRY", money(plan.get("entry")))
+            b.metric("STOP LOSS", money(plan.get("stop")))
+            c.metric("TARGET 1", money(plan.get("t1")))
+            d.metric("TARGET 2", money(plan.get("t2")))
+            e,f,g,h = st.columns(4)
+            e.metric("RISK / CONTRACT", money(plan.get("risk_dollars")))
+            f.metric("T1 R:R", f"1 : {plan['rr1']:.2f}" if plan.get("rr1") is not None else "--")
+            g.metric("T1 RETURN / CONTRACT", money(plan.get("return1")))
+            h.metric("T2 R:R", f"1 : {plan['rr2']:.2f}" if plan.get("rr2") is not None else "--")
+            if plan.get("return2") is not None:
+                st.caption(
+                    f"Target 2 potential return: {money(plan['return2'])} per GC contract  |  "
+                    f"Risk: {plan.get('risk_points', 0):.2f} points / {money(plan.get('risk_dollars'))} per contract  |  "
+                    f"Setup score: {score10(setup.setup_score)}  |  Zone quality: {setup.zone_quality_score / 10.0:.1f}/10."
+                )
+            if lifecycle.trade_ready:
+                st.success("TRADE READY â€” canonical confirmation and risk gates are satisfied.")
+            else:
+                st.warning(f"PLANNED / NOT EXECUTABLE â€” {lifecycle.reason}")
+        else:
+            st.info(f"No {selected_tf} trade setup survives the current quality and visibility filters.")
+
+    # Keep secondary controls/information below the chart so the chart remains
+    # the dominant visual workspace.
+    st.markdown('<div class="tp-section-rule"></div>', unsafe_allow_html=True)
+    below_info_col, below_toolkit_col = st.columns([1.05, 1.35], gap="large")
+
+    with below_info_col:
         execution = zone_dict(get_execution_zone(market_state))
         conflict = zone_dict(get_conflict_zone(market_state))
 
         if execution:
             st.markdown(f"""<div class="tp-intel-card">
-              <div class="tp-intel-title green">EXECUTION ZONE ({execution.get('grade','--')})</div>
+              <div class="tp-intel-title green">TRADE ZONE ({execution.get('grade','--')})</div>
               <div class="tp-intel-value">{money(execution.get('lower_bound'))} - {money(execution.get('upper_bound'))}</div>
               <div class="tp-intel-detail">{execution.get('timeframe','--')} {str(execution.get('type','')).upper()} |
               Strength {safe_float(execution.get('strength'),0):.0f}/100<br>
               Distance {points(execution.get('distance_points'))} pts</div></div>""", unsafe_allow_html=True)
         else:
-            st.markdown("""<div class="tp-intel-card"><div class="tp-intel-title green">EXECUTION ZONE</div>
-            <div class="tp-intel-value">--</div><div class="tp-intel-detail">No qualifying execution zone.</div></div>""",
+            st.markdown("""<div class="tp-intel-card"><div class="tp-intel-title green">TRADE ZONE</div>
+            <div class="tp-intel-value">--</div><div class="tp-intel-detail">No qualifying trade zone.</div></div>""",
                         unsafe_allow_html=True)
 
         if conflict:
             st.markdown(f"""<div class="tp-intel-card">
-              <div class="tp-intel-title red">ACTIVE CONFLICT ({conflict.get('grade','--')})</div>
+              <div class="tp-intel-title red">OPPOSING SUPPLY/DEMAND ({conflict.get('grade','--')})</div>
               <div class="tp-intel-value">{money(conflict.get('lower_bound'))} - {money(conflict.get('upper_bound'))}</div>
               <div class="tp-intel-detail">{conflict.get('timeframe','--')} {str(conflict.get('type','')).upper()} |
               Strength {safe_float(conflict.get('strength'),0):.0f}/100<br>
               Distance {points(conflict.get('distance_points'))} pts</div></div>""", unsafe_allow_html=True)
         else:
-            st.markdown("""<div class="tp-intel-card"><div class="tp-intel-title">ACTIVE CONFLICT</div>
-            <div class="tp-intel-value">NONE</div><div class="tp-intel-detail">No opposing MarketState conflict.</div></div>""",
+            st.markdown("""<div class="tp-intel-card"><div class="tp-intel-title">OPPOSING SUPPLY/DEMAND</div>
+            <div class="tp-intel-value">NONE</div><div class="tp-intel-detail">No opposing supply/demand overlap.</div></div>""",
                         unsafe_allow_html=True)
 
         news_color = "red" if news_level == "HIGH" else "green" if news_level == "LOW" else ""
@@ -1760,6 +1952,37 @@ with dashboard_tab:
           <div class="tp-intel-value">INSUFFICIENT DATA</div>
           <div class="tp-intel-detail">Need 30+ comparable resolved historical samples. No probability is fabricated.</div></div>""",
                     unsafe_allow_html=True)
+
+    with below_toolkit_col:
+        st.markdown("**TRADER TOOLKIT / CHART LAYERS**")
+        st.markdown("**POTENTIAL TRADE QUALITY**")
+        _quality_values = ["A+","A","B","C","ALL"]
+        _quality_labels = {"A+":"9.2+/10 - Elite","A":"8.2+/10 - Strong","B":"7.0+/10 - Developing","C":"5.5+/10 - Learning / Potential","ALL":"ALL SCORES"}
+        st.session_state.zone_quality = st.selectbox(
+            "Minimum Setup Quality", _quality_values,
+            index=_quality_values.index(st.session_state.zone_quality) if st.session_state.zone_quality in _quality_values else 2,
+            format_func=lambda value: _quality_labels[value])
+        st.checkbox("9.2+/10 Zones (Elite)", key="zone_grade_aplus")
+        st.checkbox("8.2-9.1/10 Zones (Strong)", key="zone_grade_a")
+        st.checkbox("7.0-8.1/10 Zones (Developing)", key="zone_grade_b")
+        st.checkbox("5.5-6.9/10 Zones (Learning / Potential)", key="zone_grade_c")
+        st.divider()
+        st.markdown("**MARKETSTATE ZONES**")
+        st.checkbox("Higher-Timeframe Supply/Demand", key="layer_context")
+        st.checkbox("Trade Zone", key="layer_execution")
+        st.checkbox("Opposing Supply/Demand", key="layer_conflict")
+        st.divider()
+        st.markdown("**CHART LAYERS**")
+        st.checkbox("SMA 20", key="layer_sma20")
+        st.checkbox("SMA 50", key="layer_sma50")
+        st.checkbox("SMA 200", key="layer_sma200")
+        st.checkbox("EMA 9", key="layer_ema9")
+        st.checkbox("EMA 21", key="layer_ema21")
+        st.checkbox("VWAP", key="layer_vwap")
+        st.checkbox("Previous Day High / Low", key="layer_prev_day")
+        st.checkbox("Previous Week High / Low", key="layer_prev_week")
+        st.checkbox("Volume", key="layer_volume")
+        st.caption("Display controls only. MarketState remains the source of truth.")
 
     if st.session_state.get("show_cc_calendar", False):
         st.divider()
@@ -1789,7 +2012,7 @@ with dashboard_tab:
         ready_candidates = build_setup_candidates(market_state)
         selected_candidate = next((c for c in ready_candidates if c.is_selected_zone), None)
         execution_snapshot = build_execution_lifecycle(market_state, selected_candidate)
-        st.success("BROKER GATE: ELIGIBLE FOR FUTURE ORDER ADAPTER — account risk/quantity authorization still required.")
+        st.success("BROKER GATE: ELIGIBLE FOR FUTURE ORDER ADAPTER â€” account risk/quantity authorization still required.")
         with st.expander("Broker-ready deterministic order packet", expanded=False):
             st.json(broker_order_intent(market_state, selected_candidate), expanded=False)
 
@@ -2117,12 +2340,12 @@ with system_tab:
         [
             ["V2.2", "Canonical MarketState", "COMPLETE"],
             ["V2.4", "Trading Pulse Command Center", "COMPLETE"],
-            ["V2.5", "Confirmation + Risk + Trade Plan", "CURRENT"],
-            ["V2.6", "Professor Conversation", "NEXT"],
-            ["V2.7", "Comparable Setup Backtesting", "PLANNED"],
-            ["V2.8", "AI Professor Conversation", "PLANNED"],
-            ["V2.9", "Multi-Symbol Futures Scanner", "PLANNED"],
-            ["V3.0", "Cross-Market Opportunity Ranking", "PLANNED"],
+            ["V2.5", "Confirmation + Risk + Trade Plan", "COMPLETE"],
+            ["V2.8", "Professor / Replay / Evidence Architecture", "COMPLETE"],
+            ["V2.9", "Setup Candidate + Execution Guardrails", "COMPLETE"],
+            ["V2.12", "Final GC UX + Calibrated Grading", "CURRENT / FINAL V2"],
+            ["V3.0", "Multi-Symbol Futures Integration", "NEXT"],
+            ["V3.x", "Cross-Market Opportunity Ranking", "AFTER MULTI-SYMBOL"],
         ],
         columns=["Milestone", "Scope", "Status"],
     )
@@ -2142,10 +2365,11 @@ st.divider()
 st.markdown(
     """
     <div class="tp-footer">
-        THE TRADING PULSE / GOLD TRADING COACH V2.9A /
+        THE TRADING PULSE / GOLD TRADING COACH V2 FINAL CRITICAL CHART FIX /
         CANONICAL MARKETSTATE ARCHITECTURE /
         EDUCATIONAL MARKET-ANALYSIS SOFTWARE / NOT FINANCIAL ADVICE
     </div>
     """,
     unsafe_allow_html=True,
 )
+

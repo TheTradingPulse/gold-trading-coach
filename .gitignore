@@ -72,3 +72,21 @@ dist/
 
 # Local PostgreSQL development database
 postgres-data/
+
+# ==========================================
+# Trading Pulse local development artifacts
+# ==========================================
+
+backup_v2_*/
+backups/
+
+TEST_V2_*.py
+
+V2_*SOURCE*
+V2_*CHATGPT*
+*snapshot*
+
+CURRENT_DASHBOARD_FOR_FIX.py
+dashboard_before_*.py
+dashboard_v2_*_backup.py
+

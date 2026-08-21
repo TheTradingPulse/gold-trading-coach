@@ -190,3 +190,5 @@ def authorized_broker_order_intent(state: Any, candidate: Any, authorization: An
     packet["requires_account_risk_authorization"] = False
     packet["authorized_risk_dollars"] = float(getattr(authorization, "actual_risk_dollars", 0.0))
     return packet
+
+
