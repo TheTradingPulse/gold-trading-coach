@@ -19,8 +19,9 @@ from dataclasses import dataclass, asdict
 from hashlib import sha256
 from typing import Any, Iterable, Optional
 from instruments import get_instrument
+from risk_model import structural_stop
 
-ENGINE_VERSION = "2.12"
+ENGINE_VERSION = "3.1E"
 GRADE_RANK = {"D": 0, "C": 1, "B": 2, "A": 3, "A+": 4}
 TIMEFRAME_WEIGHT = {"M": 10.0, "W": 10.0, "D": 10.0, "4H": 8.0, "1H": 6.0, "15m": 4.0, "5m": 2.0, "1m": 1.0}
 CONTEXT_TIMEFRAMES = ("M", "W", "D", "4H", "1H")
@@ -112,8 +113,10 @@ def build_setup_candidates(state: Any) -> list[SetupCandidate]:
         distance=lower-price if price<lower else price-upper if price>upper else 0
         distance_pct=distance/price*100 if price else 0; lifecycle=_lifecycle(price,lower,upper,distance_pct,width)
         projected_entry=(upper if ztype=="demand" and price<lower else lower if ztype=="supply" and price>upper else price if lower<=price<=upper else (lower if ztype=="demand" else upper))
-        tick=get_instrument(symbol).tick_size
-        projected_stop=(lower-2*tick if ztype=="demand" and tick else upper+2*tick if tick else None)
+        instrument=get_instrument(symbol); tick=instrument.tick_size
+        direction="LONG" if ztype=="demand" else "SHORT"
+        risk_preview=structural_stop(instrument,direction,projected_entry,lower,upper,tf)
+        projected_stop=risk_preview.stop
         target,opp=_nearest_opposing(ztype,projected_entry,zones)
         room=(abs(target-projected_entry) if target is not None else None)
         risk=(abs(projected_entry-projected_stop) if projected_stop is not None else None)
@@ -183,7 +186,8 @@ def build_setup_candidates(state: Any) -> list[SetupCandidate]:
             f"Higher-timeframe context contributes {mtf_pts:.1f}/10 ({mtf_aligned}/{mtf_total} aligned)",
             f"Lifecycle {lifecycle} contributes {life_pts:.1f}/9",
             f"Multi-timeframe nesting contributes {confluence_pts:.1f}/6",
-            f"Room to opposing structure contributes {room_pts:.1f}/7" + (f" ({rr:.2f}R preview)" if rr is not None else " (no preview target)"),
+            f"Room to opposing structure contributes {room_pts:.1f}/7" + (f" ({rr:.2f}R preview using adaptive structural stop)" if rr is not None else " (no preview target)"),
+            f"Risk model: {risk_preview.buffer_ticks:.0f}-tick / {risk_preview.buffer_points:.4f}-point buffer beyond zone edge; total preview risk {risk_preview.risk_points:.4f} pts",
             f"Zone width efficiency contributes {efficiency_pts:.1f}/3",
             f"Quality penalties -{penalties:.1f}: " + ("; ".join(penalty_reasons) if penalty_reasons else "none"),
             f"Quality ceiling {score_cap:.1f}: " + ("; ".join(cap_reasons) if cap_reasons else "no limiting flaw"),

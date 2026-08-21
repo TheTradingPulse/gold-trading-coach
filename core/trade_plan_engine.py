@@ -12,12 +12,17 @@ from __future__ import annotations
 from typing import Optional
 
 try:
+    from core.risk_model import structural_stop
+except ImportError:
+    from risk_model import structural_stop
+
+try:
     from core.market_state import ConfirmationState, TargetState, TradeState, ZoneState
 except ImportError:
     from market_state import ConfirmationState, TargetState, TradeState, ZoneState
 
-ENGINE_VERSION = "2.7"
-STOP_BUFFER_TICKS = 2
+ENGINE_VERSION = "3.1E"
+STOP_BUFFER_TICKS = None  # replaced by canonical adaptive structural risk model
 MIN_RR_FOR_READY = 2.0
 MAX_TARGETS = 3
 
@@ -138,15 +143,15 @@ def build_structural_trade_plan(
         confirmation.risk_reason = "Instrument tick size is invalid."
         return None
 
-    buffer_points = tick * STOP_BUFFER_TICKS
     entry = float(current_price)
-
-    if direction == "LONG":
-        stop = float(execution_zone.lower_bound) - buffer_points
-        risk_points = entry - stop
-    else:
-        stop = float(execution_zone.upper_bound) + buffer_points
-        risk_points = stop - entry
+    risk_model = structural_stop(
+        instrument, direction, entry,
+        float(execution_zone.lower_bound), float(execution_zone.upper_bound),
+        str(execution_zone.timeframe or "15m"),
+    )
+    stop = risk_model.stop
+    buffer_points = risk_model.buffer_points
+    risk_points = risk_model.risk_points
 
     if risk_points <= 0:
         confirmation.risk_reason = "Structural stop does not create positive risk distance."
@@ -155,8 +160,8 @@ def build_structural_trade_plan(
         ))
         return None
 
-    risk_ticks = risk_points / tick
-    risk_dollars = instrument.dollars_for_points(risk_points)
+    risk_ticks = risk_model.risk_ticks
+    risk_dollars = risk_model.risk_dollars_per_contract
 
     structural = _structural_target_candidates(
         direction, entry, supply_zones, demand_zones
@@ -216,8 +221,9 @@ def build_structural_trade_plan(
 
     confirmation.risk_validated = True
     confirmation.risk_reason = (
-        f"Structural risk accepted: {STOP_BUFFER_TICKS}-tick stop buffer beyond "
-        f"execution-zone invalidation and {nearest_rr:.2f}R available before "
+        f"Structural risk accepted: {risk_model.buffer_ticks:.0f}-tick adaptive buffer "
+        f"({risk_model.buffer_points:.4f} pts) beyond execution-zone invalidation and "
+        f"{nearest_rr:.2f}R available before "
         f"nearest opposing {nearest_zone.timeframe} {nearest_zone.type}."
     )
     confirmation.evidence.append(_ev(
