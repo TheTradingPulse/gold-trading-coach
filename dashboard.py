@@ -26,6 +26,8 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+import json
 
 # ---------------------------------------------------------------------
 # PATHS / EXISTING ENGINES
@@ -48,7 +50,13 @@ from news_engine import generate_news_warning, display_news_calendar
 from backtest_engine import run_backtest, get_available_years
 from backtest_lab_engine import run_lab_backtest, evidence_stats, recent_experiments, TF_SETS
 from market_watch_engine import fetch_market_watch
+from multi_market_elite_engine import scan_elite_snapshot, ELITE_MIN_SCORE, WATCH_MIN_SCORE
 from instruments import get_instrument, get_enabled_symbols
+from professor_engine import (
+    academy_lessons, answer_question, get_pending_professor_claims,
+    get_professor_metrics, get_recent_professor_questions,
+    professor_research_available, rate_professor_answer, review_professor_claim,
+)
 
 
 # ---------------------------------------------------------------------
@@ -559,22 +567,22 @@ st.markdown(
         border:1px solid #36404e; border-radius:9px; overflow:hidden;
         background:linear-gradient(145deg,#10161f,#0a0f16); margin:12px 0 12px 0;
     }}
-    .tp-status-cell {{ min-height:116px; padding:18px 18px 14px; border-right:1px solid #2b3440; }}
+    .tp-status-cell {{ min-height:68px; padding:10px 14px 9px; border-right:1px solid #2b3440; }}
     .tp-status-cell:last-child {{ border-right:none; }}
     .tp-status-label {{ color:#d5dae3; font-size:.72rem; font-weight:800; letter-spacing:.04em; }}
-    .tp-status-value {{ font-size:1.34rem; font-weight:900; margin-top:13px; letter-spacing:.01em; }}
-    .tp-status-sub {{ color:#aab4c2; font-size:.72rem; margin-top:12px; }}
+    .tp-status-value {{ font-size:1.12rem; font-weight:900; margin-top:5px; letter-spacing:.01em; }}
+    .tp-status-sub {{ color:#aab4c2; font-size:.66rem; margin-top:4px; }}
     .tp-bull {{ color:#35c76f; }} .tp-bear {{ color:#ff4d57; }}
-    .tp-watch {{ color:#f59e0b; }} .tp-no {{ color:#ff4d57; }} .tp-yes {{ color:#35c76f; }}
+    .tp-watch {{ color:#7ea6d8; }} .tp-no {{ color:#ff4d57; }} .tp-yes {{ color:#35c76f; }}
     .tp-dash {{ color:#8993a1; }}
     .tp-panelbox {{
         border:1px solid #36404e; border-radius:9px;
         background:linear-gradient(145deg,#10161f,#0a0f16); padding:15px 16px;
     }}
     .tp-mtf-head {{ color:#aeb8c6; font-size:.72rem; letter-spacing:.08em; font-weight:800; }}
-    .tp-mtf-big {{ color:#35c76f; font-size:1.55rem; font-weight:900; margin-top:9px; }}
+    .tp-mtf-big {{ color:#35c76f; font-size:1.22rem; font-weight:900; margin-top:4px; }}
     .tp-mtf-sub {{ color:#c6ccd5; font-size:.73rem; margin-top:3px; }}
-    .tp-mini-bars {{ height:40px; display:flex; align-items:flex-end; gap:9px; margin-top:7px; }}
+    .tp-mini-bars {{ height:24px; display:flex; align-items:flex-end; gap:9px; margin-top:3px; }}
     .tp-mini-bars span {{ width:16px; background:#1f6d42; border-radius:1px 1px 0 0; }}
     .tp-mini-labels {{ display:flex; justify-content:space-between; color:#8993a1; font-size:.58rem; margin-top:4px; }}
     .tp-intel-card {{
@@ -593,7 +601,7 @@ st.markdown(
     .tp-feed-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:7px; }}
     .tp-feed-dot.green {{ background:#35c76f; box-shadow:0 0 10px rgba(53,199,111,.35); }}
     .tp-feed-dot.red {{ background:#ff4d57; box-shadow:0 0 10px rgba(255,77,87,.35); }}
-    .tp-feed-dot.amber {{ background:#f59e0b; box-shadow:0 0 10px rgba(245,158,11,.35); }}
+    .tp-feed-dot.amber {{ background:#7ea6d8; box-shadow:0 0 10px rgba(126,166,216,.30); }}
     .tp-feed-wrap {{ text-align:right; color:#9fa9b7; font-size:.68rem; padding-top:5px; }}
     div[data-testid="stMetric"] {{
         background:linear-gradient(145deg,#10161f,#0a0f16);
@@ -607,7 +615,7 @@ st.markdown(
     }}
     div.stButton > button[kind="primary"] {{
         color:#11151b; font-weight:850;
-        background:linear-gradient(180deg,#ff6b74,#bd8d37); border-color:#ff7a82;
+        background:linear-gradient(180deg,#ff6670,#c93442); border-color:#ff6670;
     }}
     div[data-testid="stExpander"] {{ border-color:#36404e !important; background:#0d131b !important; }}
     div[data-testid="stCheckbox"] label p {{ color:#c8ced7 !important; font-size:.76rem !important; }}
@@ -732,12 +740,15 @@ st.markdown(
     .tp-hero-tagline {{ margin-top:6px !important; font-size:.82rem !important; }}
     .tp-hero-sub {{ font-size:.64rem !important; }}
     .tp-status-grid {{ margin:10px 0 8px !important; border-radius:8px !important; }}
-    .tp-status-cell {{ min-height:98px !important; padding:14px 16px 12px !important; }}
-    .tp-status-value {{ font-size:1.18rem !important; margin-top:9px !important; }}
-    .tp-status-sub {{ margin-top:7px !important; font-size:.66rem !important; }}
-    .tp-mtf-big {{ font-size:1.28rem !important; margin-top:6px !important; }}
-    .tp-mini-bars {{ height:28px !important; margin-top:5px !important; }}
-    .tp-mini-bars span {{ width:13px !important; }}
+    .tp-status-cell {{ min-height:54px !important; padding:8px 12px 7px !important; }}
+    .tp-status-value {{ font-size:1.02rem !important; margin-top:4px !important; line-height:1.05 !important; }}
+    .tp-status-sub {{ margin-top:3px !important; font-size:.58rem !important; line-height:1.15 !important; }}
+    .tp-mtf-big {{ font-size:1.05rem !important; margin-top:3px !important; line-height:1.05 !important; }}
+    .tp-mini-bars {{ height:14px !important; margin-top:3px !important; }}
+    .tp-mini-bars span {{ width:10px !important; max-height:14px !important; }}
+    .tp-status-label, .tp-mtf-head {{ font-size:.60rem !important; }}
+    .tp-mtf-sub {{ font-size:.58rem !important; margin-top:2px !important; }}
+    .tp-mini-labels {{ font-size:.50rem !important; margin-top:2px !important; }}
     .tp-market-watch-wrap {{ margin:8px 0 12px !important; padding:9px 10px 10px !important; }}
     .tp-market-card {{ padding:8px !important; }}
     .tp-market-price {{ font-size:.82rem !important; }}
@@ -953,9 +964,15 @@ def get_chart_data(display_tf, limit=260, symbol="GC"):
     return load_market_data(db_tf, limit=limit, symbol=symbol)
 
 
-@st.cache_resource(ttl=15, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def get_market_state(symbol="GC"):
     return build_market_state(symbol)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def get_global_elite_snapshot():
+    """Global Elite board plus explainable funnel diagnostics from one shared scan."""
+    return scan_elite_snapshot(get_enabled_symbols(), limit=6)
 
 
 def get_zone_model(state):
@@ -1117,6 +1134,150 @@ def planned_trade_metrics(candidate, market_state):
 # CHART
 # ---------------------------------------------------------------------
 
+def render_tradingview_lightweight_chart(
+    df,
+    timeframe_label,
+    state,
+    focused_candidate_id=None,
+    candidates=None,
+    show_context=True,
+    show_execution=True,
+    show_conflict=True,
+    show_sma20=False,
+    show_sma50=False,
+    show_sma200=False,
+    show_ema9=False,
+    show_ema21=False,
+    show_vwap=False,
+    show_volume=False,
+):
+    # TradingView visual renderer; Trading Pulse remains authoritative for all trade values.
+    if df is None or len(df) < 2:
+        return False
+
+    work = df.copy().tail(320)
+    if not isinstance(work.index, pd.DatetimeIndex):
+        work.index = pd.to_datetime(work.index, utc=True)
+    else:
+        if work.index.tz is None:
+            work.index = work.index.tz_localize("UTC")
+        else:
+            work.index = work.index.tz_convert("UTC")
+
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    work = work.dropna(subset=["open", "high", "low", "close"])
+    if len(work) < 2:
+        return False
+
+    candles = []
+    for ts, row in work.iterrows():
+        candles.append({
+            "time": int(ts.timestamp()),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+        })
+
+    def line_values(series):
+        vals=[]
+        for ts, value in series.dropna().items():
+            vals.append({"time": int(ts.timestamp()), "value": float(value)})
+        return vals
+
+    indicators=[]
+    close=work["close"]
+    if show_sma20:
+        indicators.append({"name":"SMA 20","color":"#7ea6d8","data":line_values(close.rolling(20).mean())})
+    if show_sma50:
+        indicators.append({"name":"SMA 50","color":"#a78bfa","data":line_values(close.rolling(50).mean())})
+    if show_sma200:
+        indicators.append({"name":"SMA 200","color":"#94a3b8","data":line_values(close.rolling(200).mean())})
+    if show_ema9:
+        indicators.append({"name":"EMA 9","color":"#60a5fa","data":line_values(close.ewm(span=9, adjust=False).mean())})
+    if show_ema21:
+        indicators.append({"name":"EMA 21","color":"#c084fc","data":line_values(close.ewm(span=21, adjust=False).mean())})
+    if show_vwap and "volume" in work.columns:
+        vol=work["volume"].fillna(0)
+        typical=(work["high"]+work["low"]+work["close"])/3.0
+        denom=vol.cumsum().replace(0, np.nan)
+        indicators.append({"name":"VWAP","color":"#38bdf8","data":line_values((typical*vol).cumsum()/denom)})
+
+    levels=[]
+    def add_level(price, title, color, style=2, width=1):
+        price=safe_float(price)
+        if price is not None:
+            levels.append({"price":float(price),"title":str(title),"color":color,"style":style,"width":width})
+
+    def add_zone(zone, title, color):
+        z=zone_dict(zone)
+        if not z:
+            return
+        add_level(z.get("upper_bound"), f"{title} HIGH", color, 2, 1)
+        add_level(z.get("lower_bound"), f"{title} LOW", color, 2, 1)
+
+    if show_context:
+        add_zone(get_context_zone(state), "CONTEXT", "#64748b")
+    if show_execution:
+        add_zone(get_execution_zone(state), "EXECUTION", "#3b82f6")
+    if show_conflict:
+        add_zone(get_conflict_zone(state), "CONFLICT", "#ef4444")
+
+    all_candidates = candidates if candidates is not None else build_setup_candidates(state)
+    selected = None
+    if focused_candidate_id:
+        selected = next((c for c in all_candidates if c.candidate_id == focused_candidate_id), None)
+    if selected is not None:
+        zone_color = "#22c55e" if str(selected.zone_type).lower()=="demand" else "#ef4444"
+        add_level(selected.upper_bound, f"{selected.timeframe} {str(selected.zone_type).upper()} HIGH", zone_color, 3, 2)
+        add_level(selected.lower_bound, f"{selected.timeframe} {str(selected.zone_type).upper()} LOW", zone_color, 3, 2)
+        add_level(getattr(selected,"projected_entry",None), "PLANNED ENTRY", "#3b82f6", 0, 2)
+        add_level(getattr(selected,"projected_stop",None), "PLANNED STOP", "#ef4444", 2, 2)
+        for idx, target in enumerate(projected_targets_for_candidate(selected, state, limit=2), 1):
+            add_level(target, f"TARGET {idx}", "#22c55e", 2, 2)
+
+    trade=getattr(state,"trade",None)
+    if str(getattr(state,"setup_state","")).upper()=="TRADE_READY" and trade is not None:
+        add_level(getattr(trade,"entry",None), "ENTRY", "#3b82f6", 0, 2)
+        add_level(getattr(trade,"stop",None), "STOP", "#ef4444", 2, 2)
+        for target in (getattr(trade,"targets",None) or [])[:3]:
+            add_level(getattr(target,"price",None), getattr(target,"name","TARGET"), "#22c55e", 2, 2)
+
+    volume=[]
+    if show_volume and "volume" in work.columns:
+        for ts,row in work.iterrows():
+            v=safe_float(row.get("volume"),0.0) or 0.0
+            volume.append({"time":int(ts.timestamp()),"value":float(v),"color":"rgba(34,197,94,.28)" if row["close"]>=row["open"] else "rgba(239,68,68,.28)"})
+
+    payload=json.dumps({"candles":candles,"levels":levels,"indicators":indicators,"volume":volume}, separators=(",",":"))
+    html=f'''<!doctype html><html><head><meta charset="utf-8"><style>
+html,body,#chart{{margin:0;width:100%;height:100%;background:#07090d;overflow:hidden}}
+#wrap{{height:720px;border:1px solid #36404e;border-radius:0 0 9px 9px;overflow:hidden;background:#07090d}}
+#chart{{height:100%}}
+#badge{{position:absolute;z-index:5;left:12px;top:10px;background:rgba(7,9,13,.78);border:1px solid #242c39;border-radius:7px;padding:6px 9px;color:#9fa9b7;font:600 11px system-ui;pointer-events:none}}
+</style></head><body><div id="wrap"><div id="badge">TRADINGVIEW CHART ENGINE &bull; {timeframe_label} &bull; TRADING PULSE DATA</div><div id="chart"></div></div>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const payload={payload};
+const root=document.getElementById('chart');
+if(!window.LightweightCharts){{root.innerHTML='<div style="color:#cbd5e1;padding:24px;font:14px system-ui">TradingView chart library could not load. Check internet access and refresh.</div>';}}
+else{{
+const chart=LightweightCharts.createChart(root,{{layout:{{background:{{type:'solid',color:'#07090d'}},textColor:'#b3bdcb'}},grid:{{vertLines:{{color:'#111722'}},horzLines:{{color:'#18212c'}}}},rightPriceScale:{{borderColor:'#242c39'}},timeScale:{{borderColor:'#242c39',timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:8,minBarSpacing:3}},crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},localization:{{priceFormatter:p=>'$'+Number(p).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}}}});
+const candles=chart.addCandlestickSeries({{upColor:'#22c55e',downColor:'#ef4444',borderUpColor:'#22c55e',borderDownColor:'#ef4444',wickUpColor:'#22c55e',wickDownColor:'#ef4444',priceLineVisible:true,lastValueVisible:true}});
+candles.setData(payload.candles);
+for(const lv of payload.levels){{candles.createPriceLine({{price:lv.price,color:lv.color,lineWidth:lv.width,lineStyle:lv.style,axisLabelVisible:true,title:lv.title}});}}
+for(const ind of payload.indicators){{const line=chart.addLineSeries({{color:ind.color,lineWidth:1,priceLineVisible:false,lastValueVisible:false,title:ind.name}});line.setData(ind.data);}}
+if(payload.volume.length){{const vol=chart.addHistogramSeries({{priceFormat:{{type:'volume'}},priceScaleId:'vol',lastValueVisible:false,priceLineVisible:false}});vol.priceScale().applyOptions({{scaleMargins:{{top:.82,bottom:0}}}});vol.setData(payload.volume);}}
+chart.timeScale().fitContent();
+const ro=new ResizeObserver(()=>chart.applyOptions({{width:root.clientWidth,height:root.clientHeight}}));ro.observe(root);
+}}
+</script></body></html>'''
+    components.html(html, height=724, scrolling=False)
+    return True
+
+
 def build_candlestick_chart(
     df,
     timeframe_label,
@@ -1143,6 +1304,7 @@ def build_candlestick_chart(
     show_grade_b=True,
     show_grade_c=False,
     focused_candidate_id=None,
+    candidates=None,
 ):
     if df is None or len(df) < 2:
         return None
@@ -1212,7 +1374,8 @@ def build_candlestick_chart(
     active_tf = tf_map.get(timeframe_label, timeframe_label)
     relevant_tfs = {active_tf}
 
-    all_candidates = build_setup_candidates(state)
+    # V3.4 Pass 2B: consume the canonical candidate set created once per rerun.
+    all_candidates = candidates if candidates is not None else build_setup_candidates(state)
     visible_candidates = filter_candidates(
         all_candidates,
         minimum_grade=min_zone_grade,
@@ -1221,7 +1384,7 @@ def build_candlestick_chart(
         limit=12,
     )
 
-    # V3.3E: four research-zone toggles expose canonical setup-candidate zones by
+    # Legacy foundation: four research-zone toggles expose canonical setup-candidate zones by
     # timeframe family and side. Setup Quality buttons above control which grades
     # are eligible, so the two control groups work together instead of duplicating
     # MarketState cards.
@@ -1663,6 +1826,386 @@ def render_professor_bridge(state):
     )
 
 
+def professor_md(text):
+    """Render Professor prose without Streamlit treating dollar prices as LaTeX math."""
+    return str(text or "").replace("$", r"\$")
+
+
+def selected_setup_professor_payload(state, setup, lifecycle, plan):
+    """Ground Professor follow-up in the exact selected deterministic setup."""
+    payload = dict(state.professor_payload() or {})
+    payload["selected_setup"] = {
+        "candidate_id": str(getattr(setup, "candidate_id", "")),
+        "symbol": str(getattr(state, "root_symbol", DISPLAY_SYMBOL)),
+        "direction": "LONG" if getattr(setup, "zone_type", "") == "demand" else "SHORT",
+        "timeframe": str(getattr(setup, "timeframe", "--")),
+        "zone_type": str(getattr(setup, "zone_type", "--")).upper(),
+        "zone_low": safe_float(getattr(setup, "lower_bound", None)),
+        "zone_high": safe_float(getattr(setup, "upper_bound", None)),
+        "setup_score": safe_float(getattr(setup, "setup_score", None)),
+        "zone_quality_score": safe_float(getattr(setup, "zone_quality_score", None)),
+        "freshness_score": safe_float(getattr(setup, "freshness_score", None)),
+        "retests": getattr(setup, "retests", None),
+        "projected_rr": safe_float(getattr(setup, "projected_rr", None)),
+        "lifecycle": str(getattr(setup, "lifecycle", "--")),
+        "execution_stage": str(getattr(lifecycle, "stage", "--")),
+        "trade_ready": bool(getattr(lifecycle, "trade_ready", False)),
+        "execution_reason": str(getattr(lifecycle, "reason", "")),
+        "entry": safe_float(plan.get("entry")),
+        "stop": safe_float(plan.get("stop")),
+        "target_1": safe_float(plan.get("t1")),
+        "target_2": safe_float(plan.get("t2")),
+        "risk_dollars_per_contract": safe_float(plan.get("risk_dollars")),
+        "target_1_rr": safe_float(plan.get("rr1")),
+        "target_2_rr": safe_float(plan.get("rr2")),
+    }
+    return payload
+
+
+def setup_professor_assessment(state, setup, lifecycle, plan):
+    """Conservative UI assessment derived only from deterministic Trading Pulse state."""
+    ready = bool(getattr(lifecycle, "trade_ready", False))
+    lifecycle_name = str(getattr(setup, "lifecycle", "") or "").upper()
+    stage_name = str(getattr(lifecycle, "stage", "") or "").upper()
+    missing = list(getattr(state.confirmation, "missing_conditions", None) or [])
+    conflict = bool(get_conflict_zone(state))
+    entry = safe_float(plan.get("entry"))
+    stop = safe_float(plan.get("stop"))
+    risk_points = safe_float(plan.get("risk_points"))
+
+    invalid = (
+        lifecycle_name in {"INVALIDATED", "EXPIRED", "BROKEN", "CANCELLED", "CANCELED"}
+        or stage_name in {"INVALIDATED", "EXPIRED", "BROKEN", "CANCELLED", "CANCELED"}
+        or entry is None or stop is None or risk_points is None or risk_points <= 0
+    )
+    if ready and not invalid:
+        return "TAKE", "The deterministic execution gate is satisfied. Follow the canonical plan; do not alter the engine levels."
+    if invalid:
+        return "AVOID", "The selected idea is invalid, expired, or lacks a complete deterministic risk plan. Do not treat it as executable."
+
+    reasons = []
+    if conflict:
+        reasons.append("opposing structure is still in the way")
+    if missing:
+        reasons.append("confirmation is incomplete")
+    if not reasons:
+        reasons.append("the execution gate is not yet satisfied")
+    return "WATCH", "The structure is worth monitoring, but " + " and ".join(reasons) + ". Wait for Trading Pulse to confirm the trade."
+
+
+def clean_professor_answer(answer):
+    """Keep citations in the grounding expander instead of dumping source metadata into prose."""
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    kept = []
+    for line in text.splitlines():
+        low = line.strip().lower()
+        if low.startswith("futuresprof source context:") or low.startswith("source context:"):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def render_selected_setup_professor(state, setup, lifecycle, plan):
+    """Deep, interactive explanation workspace for the selected deterministic setup."""
+    side = "LONG" if setup.zone_type == "demand" else "SHORT"
+    missing = list(getattr(state.confirmation, "missing_conditions", None) or [])
+    conflict = zone_dict(get_conflict_zone(state))
+    news_warning, news_level = get_news_state()
+    ready = bool(getattr(lifecycle, "trade_ready", False))
+
+    entry = safe_float(plan.get("entry"))
+    stop = safe_float(plan.get("stop"))
+    t1 = safe_float(plan.get("t1"))
+    t2 = safe_float(plan.get("t2"))
+    current = safe_float(getattr(state, "current_price", None))
+    zone_low = safe_float(getattr(setup, "lower_bound", None))
+    zone_high = safe_float(getattr(setup, "upper_bound", None))
+    score = safe_float(getattr(setup, "setup_score", None))
+    quality = safe_float(getattr(setup, "zone_quality_score", None))
+    freshness = safe_float(getattr(setup, "freshness_score", None))
+    retests = getattr(setup, "retests", None)
+    lifecycle_name = str(getattr(setup, "lifecycle", "--")).replace("_", " ")
+    rr1 = safe_float(plan.get("rr1"))
+    rr2 = safe_float(plan.get("rr2"))
+    risk_points = safe_float(plan.get("risk_points"))
+    risk_dollars = safe_float(plan.get("risk_dollars"))
+
+    if ready:
+        confirmation_text = "All deterministic execution checks are currently satisfied."
+    elif missing:
+        confirmation_text = "; ".join(str(x) for x in missing[:4])
+    else:
+        confirmation_text = str(getattr(lifecycle, "reason", "Waiting for deterministic confirmation."))
+
+    conflict_text = "No opposing canonical conflict zone is currently flagged."
+    if conflict:
+        conflict_text = (
+            f"Opposing {conflict.get('timeframe','--')} {str(conflict.get('type','')).upper()} "
+            f"at {money(conflict.get('lower_bound'))} - {money(conflict.get('upper_bound'))}."
+        )
+
+    zone_text = (
+        f"{money(zone_low)} to {money(zone_high)}"
+        if zone_low is not None and zone_high is not None else "the selected canonical zone"
+    )
+    quality_text = f"{quality/10.0:.1f}/10" if quality is not None else "--"
+    fresh_text = f"{freshness/10.0:.1f}/10" if freshness is not None else "--"
+    retest_text = str(retests) if retests is not None else "--"
+
+    if side == "LONG":
+        entry_logic = (
+            f"The engine plans the long at {money(entry)} around the {setup.timeframe} DEMAND structure "
+            f"({zone_text}). The idea is to participate only where buyers previously demonstrated control, "
+            f"rather than chase price higher. The setup is currently {lifecycle_name}; execution remains governed "
+            f"by the confirmation gate shown below."
+        )
+        stop_logic = (
+            f"The stop at {money(stop)} is the deterministic invalidation level below the long thesis. "
+            f"A sustained move through that level means the demand structure the setup depends on has failed. "
+            f"It is not a Professor-generated number and the Professor will not move it farther away to rescue a trade."
+        )
+    else:
+        entry_logic = (
+            f"The engine plans the short at {money(entry)} around the {setup.timeframe} SUPPLY structure "
+            f"({zone_text}). The idea is to participate where sellers previously demonstrated control, "
+            f"rather than chase price lower. The setup is currently {lifecycle_name}; execution remains governed "
+            f"by the confirmation gate shown below."
+        )
+        stop_logic = (
+            f"The stop at {money(stop)} is the deterministic invalidation level above the short thesis. "
+            f"A sustained move through that level means the supply structure the setup depends on has failed. "
+            f"It is not a Professor-generated number and the Professor will not move it farther away to rescue a trade."
+        )
+
+    thesis = (
+        f"This is a {score10(score)} {side} candidate built from a {setup.timeframe} "
+        f"{setup.zone_type.upper()} zone. Zone quality is {quality_text}, freshness is {fresh_text}, "
+        f"and recorded retests are {retest_text}. The setup is interesting because the canonical candidate engine "
+        f"has identified actionable structure, but a good zone is not automatically an executable trade. "
+        f"The lifecycle, confirmation state, opposing structure, risk/reward and event context still have to agree."
+    )
+
+    target_logic = (
+        f"Target 1 is {money(t1)}"
+        + (f" ({rr1:.2f}R)" if rr1 is not None else "")
+        + f" and Target 2 is {money(t2)}"
+        + (f" ({rr2:.2f}R)" if rr2 is not None else "")
+        + ". These are the deterministic plan targets currently supplied by Trading Pulse. "
+          "The Professor explains how to monitor the path to them; it does not silently substitute new targets."
+    )
+
+    if current is not None and entry is not None:
+        distance = abs(current - entry)
+        location_text = f"Current canonical price is {money(current)}, {distance:,.2f} points from planned entry."
+    else:
+        location_text = "Current-price distance is unavailable in this snapshot."
+
+    assessment, assessment_reason = setup_professor_assessment(state, setup, lifecycle, plan)
+    assessment_color = {"TAKE": "#35c76f", "WATCH": "#7ea6d8", "AVOID": "#ff4d57"}.get(assessment, "#7ea6d8")
+    symbol = str(getattr(state, "root_symbol", None) or DISPLAY_SYMBOL)
+    st.markdown(
+        f"<div style='border:1px solid {assessment_color};border-left:5px solid {assessment_color};"
+        f"background:#0d131b;border-radius:9px;padding:14px 16px;margin:4px 0 16px'>"
+        f"<div style='font-size:.66rem;font-weight:900;letter-spacing:.14em;color:#9fa9b7'>"
+        f"PROFESSOR ASSESSMENT · {symbol} · {setup.timeframe}</div>"
+        f"<div style='font-size:1.55rem;font-weight:950;color:{assessment_color};margin-top:3px'>{assessment}</div>"
+        f"<div style='font-size:.82rem;color:#d9e0e7;margin-top:5px'>{assessment_reason}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### PROFESSOR TRADE BRIEF")
+    st.caption(
+        "A live teaching layer grounded in the selected canonical setup. Trading Pulse owns the numbers; "
+        "the Professor explains the thesis, evidence, confirmation, management and risks."
+    )
+
+    st.markdown("#### TRADE THESIS")
+    st.markdown(professor_md(thesis))
+    st.caption(location_text)
+
+    left, right = st.columns(2, gap="medium")
+    with left:
+        st.markdown("#### WHY THIS ENTRY")
+        st.markdown(professor_md(entry_logic))
+    with right:
+        st.markdown("#### WHY THIS STOP")
+        st.markdown(professor_md(stop_logic))
+
+    st.markdown("#### TARGETS & TRADE-MANAGEMENT ROADMAP")
+    st.markdown(professor_md(target_logic))
+
+    r1, r2, r3, r4 = st.columns(4, gap="small")
+    r1.markdown(
+        f"**1 · BEFORE ENTRY**  \n"
+        f"{'Execution gate is satisfied.' if ready else 'WAIT. Confirmation is incomplete.'}  \n\n"
+        f"{confirmation_text}"
+    )
+    r2.markdown(
+        f"**2 · AFTER ENTRY**  \n"
+        f"Watch whether the selected {setup.timeframe} {setup.zone_type.upper()} structure continues to hold. "
+        f"The hard thesis boundary remains {money(stop)}."
+    )
+    r3.markdown(
+        f"**3 · APPROACHING T1**  \n"
+        f"Track whether price is progressing cleanly toward {money(t1)} or repeatedly losing the structure that justified entry. "
+        f"Do not invent a discretionary exit simply because a candle pulls back."
+    )
+    r4.markdown(
+        f"**4 · T1 → T2**  \n"
+        f"Re-ground the trade against the newest MarketState before making a management decision. "
+        f"V3.4 does not invent a trailing stop or early-close level that the deterministic engine has not defined."
+    )
+
+    st.info(
+        "PULLBACK RULE: the Professor can explain whether current structure is strengthening or deteriorating, "
+        "but V3.4 will not fabricate an early-close price. The authoritative invalidation remains the engine stop "
+        "until a deterministic management rule exists. This is a deliberate V3.4 safety boundary."
+    )
+
+    a, b, c = st.columns(3, gap="medium")
+    a.markdown(f"**CONFIRMATION / CURRENT BLOCKER**  \n{confirmation_text}")
+    b.markdown(f"**STRUCTURAL CONFLICT**  \n{conflict_text}")
+    c.markdown(
+        f"**PLAN RISK**  \n"
+        f"{f'{risk_points:,.2f} pts' if risk_points is not None else '--'}"
+        f"{f' / {money(risk_dollars)} per contract' if risk_dollars is not None else ''}"
+    )
+
+    level = str(news_level or "UNKNOWN").upper()
+    if level in {"HIGH", "CRITICAL", "RED"}:
+        st.error(f"EVENT / NEWS RISK: {news_warning}")
+    elif level in {"MEDIUM", "MODERATE", "AMBER", "YELLOW"}:
+        st.warning(f"EVENT / NEWS RISK: {news_warning}")
+    else:
+        st.info(f"EVENT / NEWS CONTEXT: {news_warning}")
+
+    if professor_research_available():
+        st.success("RESEARCH MODE ONLINE · Professor can use OpenAI web research. New research claims enter PENDING review; they are not learned as truth automatically.")
+    else:
+        st.info("RESEARCH MODE INSTALLED · Add OPENAI_API_KEY to enable live web research. Local FuturesProf grounding remains available.")
+
+    st.markdown("#### ASK THE PROFESSOR ABOUT THIS TRADE")
+    st.caption(
+        "Ask follow-ups about the setup, confirmation, stop logic, targets, pullbacks, timeframe conflict, "
+        "news, or what your taught material says. Each answer is re-grounded in the current selected MarketState."
+    )
+
+    qkey = f"setup_prof_q_{setup.candidate_id}"
+    question = st.text_area(
+        "Your question",
+        placeholder=(
+            "Examples:\n"
+            "• Why is this entry attractive?\n"
+            "• What exact confirmation is still missing?\n"
+            "• Why is the stop at this level?\n"
+            "• Price pulled back — what changed in the thesis?\n"
+            "• What should I watch as price approaches Target 1?\n"
+            "• What does my taught material say about this setup?"
+        ),
+        height=125,
+        key=qkey,
+    )
+
+    ask_col, clear_col, _ = st.columns([1.1, 0.8, 2.1])
+    with ask_col:
+        ask = st.button(
+            "ASK PROFESSOR",
+            type="primary",
+            width="stretch",
+            key=f"setup_prof_ask_{setup.candidate_id}",
+        )
+    with clear_col:
+        clear = st.button(
+            "CLEAR CHAT",
+            width="stretch",
+            key=f"setup_prof_clear_{setup.candidate_id}",
+        )
+
+    history_key = f"setup_prof_history_{setup.candidate_id}"
+    if history_key not in st.session_state:
+        st.session_state[history_key] = []
+
+    if clear:
+        st.session_state[history_key] = []
+        st.rerun()
+
+    if ask:
+        user_question = str(question or "").strip()
+        if not user_question:
+            st.warning("Type a question in the box above.")
+        else:
+            live_payload = selected_setup_professor_payload(state, setup, lifecycle, plan)
+            live_payload["professor_assessment"] = setup_professor_assessment(state, setup, lifecycle, plan)[0]
+            live_payload["conversation_context"] = [
+                {"question": item.get("question", ""), "answer": item.get("answer", "")}
+                for item in st.session_state[history_key][-4:]
+            ]
+            selected_symbol = str(live_payload.get("selected_setup", {}).get("symbol") or DISPLAY_SYMBOL)
+            assessment, assessment_reason = setup_professor_assessment(state, setup, lifecycle, plan)
+            teaching_prompt = (
+                f"Answer as the Trading Pulse Professor about {selected_symbol}. The current deterministic assessment is "
+                f"{assessment}: {assessment_reason} Deeply explain the selected trade using the supplied canonical "
+                "MarketState and selected_setup values as authoritative facts. Give the trader a direct answer first, "
+                "then explain why, what is still missing, what would invalidate the thesis, and what to monitor next. "
+                "Connect the answer to retrieved FuturesProf knowledge when relevant, but do not append source titles, "
+                "domains, a bibliography, or a 'source context' line in the prose; sources are displayed separately. "
+                "Never invent or alter entry, stop, targets, probabilities, confirmation status, execution permission, "
+                "or an early-exit level. If the deterministic payload does not define a requested management level or "
+                "rule, say that clearly. User question: " + user_question
+            )
+            packet = answer_question(teaching_prompt, live_payload, research_mode=True)
+            packet["answer"] = clean_professor_answer(packet.get("answer", ""))
+            st.session_state[history_key].append(
+                {
+                    "question": user_question,
+                    "answer": packet.get("answer", ""),
+                    "sources": packet.get("sources") or [],
+                    "question_id": packet.get("question_id"),
+                    "research_status": packet.get("research_status"),
+                    "pending_claims": packet.get("pending_claims", 0),
+                }
+            )
+
+    history = st.session_state.get(history_key, [])
+    if history:
+        st.markdown("#### PROFESSOR CONVERSATION")
+        for idx, item in enumerate(history[-6:], start=max(1, len(history)-5)):
+            st.markdown(f"**YOU · {idx}**  \n{item.get('question','')}")
+            st.markdown(professor_md(f"**PROFESSOR**  \n{item.get('answer','')}"))
+            sources = item.get("sources") or []
+            if sources:
+                with st.expander(f"GROUNDING SOURCES · ANSWER {idx}", expanded=False):
+                    for source in sources:
+                        label = source.get("title") or source.get("domain") or "FuturesProf source"
+                        st.write(f"- {label} | {source.get('domain','')} | {source.get('source_type','GROUNDED')}")
+            qid = item.get("question_id")
+            if qid:
+                fb1, fb2, fb3 = st.columns([.7,.7,3])
+                if fb1.button("USEFUL", key=f"prof_up_{qid}"):
+                    rate_professor_answer(int(qid), 1, None)
+                    st.toast("Professor feedback saved")
+                if fb2.button("WRONG", key=f"prof_down_{qid}"):
+                    rate_professor_answer(int(qid), -1, None)
+                    st.toast("Flagged for review")
+                fb3.caption(f"Research: {item.get('research_status','--')} · Pending claims: {item.get('pending_claims',0)}")
+            st.divider()
+
+    with st.expander("PROFESSOR GROUNDING / ADVANCED DETAILS", expanded=False):
+        st.markdown(
+            "**LIVE TRADING PULSE FACTS** — selected MarketState, candidate, lifecycle, confirmation, "
+            "entry/stop/targets and current event state."
+        )
+        st.markdown(
+            "**TAUGHT + GROUNDED KNOWLEDGE** — FuturesProf retrieval used by Professor answers when relevant."
+        )
+        st.markdown(
+            "**HISTORICAL EVIDENCE** — used only when the available evidence layer supplies it; no fake probability."
+        )
+        st.json(selected_setup_professor_payload(state, setup, lifecycle, plan), expanded=False)
+
+
 # ---------------------------------------------------------------------
 # SESSION / MARKETSTATE
 # ---------------------------------------------------------------------
@@ -1712,6 +2255,10 @@ with st.spinner(f"Building canonical {active_symbol} MarketState..."):
         st.error(f"Unable to build MarketState: {exc}")
         st.stop()
 
+# V3.4 Pass 2B: one canonical candidate calculation per Streamlit rerun.
+# Every dashboard consumer below reuses this immutable rerun snapshot.
+canonical_candidates = build_setup_candidates(market_state)
+
 health, age_minutes = data_health(market_state.market_timestamp)
 news_warning, news_level = get_news_state()
 
@@ -1738,11 +2285,193 @@ with header_title:
         unsafe_allow_html=True,
     )
 
-dashboard_tab, journal_tab, backtest_tab = st.tabs(
-    ["COMMAND CENTER", "JOURNAL", "BACKTEST"]
-)
+command_tabs = ["COMMAND CENTER", "JOURNAL", "BACKTEST", "PROFESSOR"]
+dashboard_tab, journal_tab, backtest_tab, professor_tab = st.tabs(command_tabs)
 
 with dashboard_tab:
+    # V3.4 Pass 3A: global multi-market / multi-timeframe Elite board.
+    # The selected chart does not control opportunity discovery.
+    # This is presentation only: no journal writes occur during Streamlit rendering.
+    with st.spinner("Scanning all markets for Elite opportunities..."):
+        global_elite, elite_diagnostics = get_global_elite_snapshot()
+
+    st.markdown("""
+    <style>
+    .tp-elite-wrap {border:1px solid #26364b;border-radius:10px;padding:14px 16px 16px;background:linear-gradient(180deg,#0c131d 0%,#080d14 100%);margin:8px 0 12px;}
+    .tp-elite-head {display:flex;align-items:end;justify-content:space-between;margin-bottom:4px;}
+    .tp-elite-title {font-size:18px;font-weight:900;color:#f7f8fb;letter-spacing:.02em;}
+    .tp-elite-sub {font-size:11px;color:#8192aa;margin-top:2px;}
+    .tp-elite-count {font-size:11px;font-weight:900;color:#ff6b74;letter-spacing:.08em;}
+    .tp-opp-card {border:1px solid #52657a;border-radius:10px;background:#0b1620;overflow:hidden;min-height:196px;box-shadow:0 8px 20px rgba(0,0,0,.18);}
+    .tp-opp-top {display:grid;grid-template-columns:.85fr 1.3fr .85fr;border-bottom:1px solid #52657a;align-items:center;}
+    .tp-opp-top span {padding:8px 9px;font-weight:900;font-size:11px;border-right:1px solid #52657a;line-height:1.1;}
+    .tp-opp-top span:nth-child(1) {text-align:left;letter-spacing:.04em;}
+    .tp-opp-top span:nth-child(2) {text-align:center;font-size:17px;letter-spacing:.08em;color:#ffffff;text-shadow:0 0 10px rgba(255,255,255,.06);}
+    .tp-opp-top span:nth-child(3) {border-right:0;text-align:center;font-size:18px;padding-top:5px;padding-bottom:5px;}
+    .tp-long {color:#43dc8b}.tp-short {color:#ff5b57}.tp-up{color:#43dc8b}.tp-down{color:#ff5b57}
+    .tp-opp-row {display:grid;grid-template-columns:1fr 1.45fr;border-bottom:1px solid #52657a;}
+    .tp-opp-row:last-child {border-bottom:0;}
+    .tp-opp-row span {padding:7px 9px;font-size:12px;border-right:1px solid #52657a;}
+    .tp-opp-row span:last-child {border-right:0;text-align:right;font-weight:800;color:#f5f7fa;}
+    .tp-opp-label {font-weight:800;color:#d8e0e9;}
+    .tp-opp-meta {padding:7px 9px;color:#ff6b74;font-size:10px;font-weight:800;letter-spacing:.03em;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # V3.4 Final: always show one best available setup per enabled market.
+    # Elite remains a strict 9.0+ global designation and receives a star.
+    # The board is useful even when only zero or one market is currently Elite.
+    elite_by_symbol = {opportunity.symbol: opportunity for opportunity in global_elite}
+    best_setups = []
+
+    for scan_symbol in MARKET_WATCH_ORDER:
+        try:
+            scan_state = get_market_state(scan_symbol)
+            scan_candidates = build_setup_candidates(scan_state)
+            if not scan_candidates:
+                continue
+
+            elite_opportunity = elite_by_symbol.get(scan_symbol)
+            if elite_opportunity is not None:
+                best_candidate = elite_opportunity.candidate
+                composite_score = safe_float(elite_opportunity.composite_score, 0.0) or 0.0
+                confirmation_count = elite_opportunity.confirmation_count
+                mtf_aligned = elite_opportunity.mtf_aligned
+                mtf_total = elite_opportunity.mtf_total
+                direction = elite_opportunity.direction
+                is_elite = composite_score >= ELITE_MIN_SCORE
+            else:
+                best_candidate = max(
+                    scan_candidates,
+                    key=lambda c: (
+                        safe_float(getattr(c, "setup_score", None), 0.0) or 0.0,
+                        safe_float(getattr(c, "zone_quality_score", None), 0.0) or 0.0,
+                        safe_float(getattr(c, "projected_rr", None), 0.0) or 0.0,
+                    ),
+                )
+                composite_score = safe_float(getattr(best_candidate, "setup_score", None), 0.0) or 0.0
+                confirmation_count = 0
+                mtf_aligned = 0
+                mtf_total = 0
+                direction = "LONG" if str(best_candidate.zone_type).lower() == "demand" else "SHORT"
+                is_elite = False
+
+            best_setups.append({
+                "symbol": scan_symbol,
+                "state": scan_state,
+                "candidate": best_candidate,
+                "composite_score": composite_score,
+                "confirmation_count": confirmation_count,
+                "mtf_aligned": mtf_aligned,
+                "mtf_total": mtf_total,
+                "direction": direction,
+                "is_elite": is_elite,
+            })
+        except Exception:
+            continue
+
+    st.markdown(
+        f"""<div class="tp-elite-wrap"><div class="tp-elite-head"><div>
+        <div class="tp-elite-title">BEST TRADE SETUPS</div>
+        <div class="tp-elite-sub">Best available setup for each enabled market. A star marks a setup that also passes the strict {ELITE_MIN_SCORE / 10.0:.1f}/10 Elite gate.</div>
+        </div><div class="tp-elite-count">{len(global_elite)} ELITE &#9733;</div></div></div>""",
+        unsafe_allow_html=True,
+    )
+
+    if best_setups:
+        setup_cols = st.columns(4, gap="medium")
+        for i, item in enumerate(best_setups):
+            candidate = item["candidate"]
+            setup_state = item["state"]
+            side = item["direction"]
+            arrow = "&#8593;" if side == "LONG" else "&#8595;"
+            side_cls = "tp-long" if side == "LONG" else "tp-short"
+            arrow_cls = "tp-up" if side == "LONG" else "tp-down"
+            elite_star = " &#9733;" if item["is_elite"] else ""
+            elite_label = "ELITE" if item["is_elite"] else "BEST AVAILABLE"
+
+            try:
+                setup_plan = planned_trade_metrics(candidate, setup_state)
+            except Exception:
+                setup_plan = {}
+
+            mtf_text = (
+                f"{item['mtf_aligned']}/{item['mtf_total']} aligned"
+                if item["mtf_total"] else "best current candidate"
+            )
+
+            with setup_cols[i % len(setup_cols)]:
+                st.markdown(
+                    f"""<div class="tp-opp-card">
+                      <div class="tp-opp-top"><span class="{side_cls}">{side}</span><span>{item['symbol']}{elite_star}</span><span class="{arrow_cls}">{arrow}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Status</span><span>{elite_label}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Setup</span><span>{score10(candidate.setup_score)}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Elite Composite</span><span>{item['composite_score'] / 10.0:.1f}/10</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Timeframe</span><span>{candidate.timeframe} {candidate.zone_type.upper()}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">MTF Context</span><span>{mtf_text}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Entry</span><span>{money(setup_plan.get('entry'))}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Stop</span><span>{money(setup_plan.get('stop'))}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Target 1</span><span>{money(setup_plan.get('t1'))}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Target 2</span><span>{money(setup_plan.get('t2'))}</span></div>
+                      <div class="tp-opp-meta">{candidate.lifecycle.replace('_',' ')} / {candidate.distance_points:.2f} pts from zone</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "LOAD THIS SETUP",
+                    key=f"best_load_{item['symbol']}_{candidate.candidate_id}",
+                    width="stretch",
+                ):
+                    tf_display = {"D": "1D", "W": "1W"}.get(candidate.timeframe, candidate.timeframe)
+                    st.session_state.active_symbol = item["symbol"]
+                    if tf_display in CHART_TIMEFRAMES:
+                        st.session_state.chart_tf = tf_display
+                    st.session_state.focused_candidate_id = candidate.candidate_id
+                    st.session_state[f"preferred_candidate_{tf_display}"] = candidate.candidate_id
+                    st.rerun()
+    else:
+        st.caption("No canonical setup candidates are currently available across the enabled markets.")
+
+    # Elite 9.0+ opportunities are journaled automatically for paper tracking.
+    # add_candidate_to_journal is duplicate-safe, so refreshes do not create repeated trades.
+    for elite_opportunity in global_elite:
+        if safe_float(elite_opportunity.composite_score, 0.0) < ELITE_MIN_SCORE:
+            continue
+        try:
+            elite_plan = planned_trade_metrics(elite_opportunity.candidate, elite_opportunity.market_state)
+            add_candidate_to_journal(
+                elite_opportunity.candidate,
+                elite_plan,
+                engine_version="3.4",
+                source="ELITE_AUTO",
+            )
+        except Exception:
+            pass
+
+    # Cross-market watch strip. GC is the active full-analysis market.
+    try:
+        market_watch = get_market_watch()
+    except Exception:
+        market_watch = {}
+
+    # V3.3G canonical-source integrity guard. Market Watch must agree with the
+    # same MarketState price boundary used by the chart/analysis pipeline.
+    _watch_active = safe_float((market_watch.get(active_symbol) or {}).get("price"))
+    _state_active = safe_float(market_state.current_price)
+    if _watch_active is not None and _state_active is not None:
+        _tick = max(float(get_instrument(active_symbol).tick_size), 1e-12)
+        _delta_ticks = abs(_watch_active - _state_active) / _tick
+        if _delta_ticks > 1.01:
+            st.error(f"DATA INTEGRITY BLOCK: {active_symbol} Market Watch ({_watch_active:,.2f}) != canonical MarketState ({_state_active:,.2f}). Refresh/inspect feed before using trade levels.")
+    render_market_watch(market_watch)
+    _switch_cols = st.columns(len(MARKET_WATCH_ORDER))
+    for _i, _symbol in enumerate(MARKET_WATCH_ORDER):
+        if _switch_cols[_i].button(_symbol, key=f"switch_market_{_symbol}", width="stretch", type="primary" if _symbol == active_symbol else "secondary"):
+            if _symbol != active_symbol:
+                st.session_state.active_symbol = _symbol
+                st.session_state.focused_candidate_id = None
+                st.rerun()
+
     # Top status strip.
     bias = str(market_state.market_bias or "--").upper()
     bias_cls = "tp-bull" if bias == "BULLISH" else "tp-bear" if bias == "BEARISH" else "tp-watch"
@@ -1787,121 +2516,6 @@ with dashboard_tab:
 
     st.caption("Multi-timeframe alignment is context only; Trade Ready still requires confirmation and risk validation.")
 
-    # Cross-market watch strip. GC is the active full-analysis market.
-    try:
-        market_watch = get_market_watch()
-    except Exception:
-        market_watch = {}
-
-    # V3.3G canonical-source integrity guard. Market Watch must agree with the
-    # same MarketState price boundary used by the chart/analysis pipeline.
-    _watch_active = safe_float((market_watch.get(active_symbol) or {}).get("price"))
-    _state_active = safe_float(market_state.current_price)
-    if _watch_active is not None and _state_active is not None:
-        _tick = max(float(get_instrument(active_symbol).tick_size), 1e-12)
-        _delta_ticks = abs(_watch_active - _state_active) / _tick
-        if _delta_ticks > 1.01:
-            st.error(f"DATA INTEGRITY BLOCK: {active_symbol} Market Watch ({_watch_active:,.2f}) != canonical MarketState ({_state_active:,.2f}). Refresh/inspect feed before using trade levels.")
-    render_market_watch(market_watch)
-    _switch_cols = st.columns(len(MARKET_WATCH_ORDER))
-    for _i, _symbol in enumerate(MARKET_WATCH_ORDER):
-        if _switch_cols[_i].button(_symbol, key=f"switch_market_{_symbol}", width="stretch", type="primary" if _symbol == active_symbol else "secondary"):
-            if _symbol != active_symbol:
-                st.session_state.active_symbol = _symbol
-                st.session_state.focused_candidate_id = None
-                st.rerun()
-
-    # V3.3B ELITE OPPORTUNITY BOARD.
-    candidates_212 = build_setup_candidates(market_state)
-    priority_candidates = [
-        c for c in candidates_212
-        if c.setup_score >= 90.0
-        and c.lifecycle in ("APPROACHING", "IN_ZONE", "QUALIFIED")
-    ]
-    priority_candidates.sort(key=lambda c: (-c.setup_score, c.distance_percent))
-
-    # V3.3C: every elite setup becomes evidence automatically. The tracker
-    # permanently de-duplicates ELITE_AUTO snapshots, so Streamlit reruns do
-    # not create duplicate journal rows. This is paper tracking only.
-    elite_auto_created = 0
-    elite_auto_errors = []
-    for _elite_candidate in priority_candidates:
-        try:
-            _elite_plan = planned_trade_metrics(_elite_candidate, market_state)
-            _, _created = add_candidate_to_journal(
-                _elite_candidate, _elite_plan, engine_version="3.3C", source="ELITE_AUTO"
-            )
-            elite_auto_created += int(bool(_created))
-        except Exception as _elite_exc:
-            elite_auto_errors.append(str(_elite_exc))
-
-    st.markdown("""
-    <style>
-    .tp-elite-wrap {border:1px solid #26364b;border-radius:10px;padding:14px 16px 16px;background:linear-gradient(180deg,#0c131d 0%,#080d14 100%);margin:8px 0 12px;}
-    .tp-elite-head {display:flex;align-items:end;justify-content:space-between;margin-bottom:4px;}
-    .tp-elite-title {font-size:18px;font-weight:900;color:#f7f8fb;letter-spacing:.02em;}
-    .tp-elite-sub {font-size:11px;color:#8192aa;margin-top:2px;}
-    .tp-elite-count {font-size:11px;font-weight:900;color:#ff6b74;letter-spacing:.08em;}
-    .tp-opp-card {border:1px solid #52657a;border-radius:10px;background:#0b1620;overflow:hidden;min-height:214px;box-shadow:0 8px 20px rgba(0,0,0,.18);}
-    .tp-opp-top {display:grid;grid-template-columns:1fr 1.3fr .45fr;border-bottom:1px solid #52657a;}
-    .tp-opp-top span {padding:8px 9px;font-weight:900;font-size:12px;border-right:1px solid #52657a;}
-    .tp-opp-top span:last-child {border-right:0;text-align:center;font-size:18px;padding-top:4px;}
-    .tp-long {color:#43dc8b}.tp-short {color:#ff5b57}.tp-up{color:#43dc8b}.tp-down{color:#ff5b57}
-    .tp-opp-row {display:grid;grid-template-columns:1fr 1.45fr;border-bottom:1px solid #52657a;}
-    .tp-opp-row:last-child {border-bottom:0;}
-    .tp-opp-row span {padding:7px 9px;font-size:12px;border-right:1px solid #52657a;}
-    .tp-opp-row span:last-child {border-right:0;text-align:right;font-weight:800;color:#f5f7fa;}
-    .tp-opp-label {font-weight:800;color:#d8e0e9;}
-    .tp-opp-meta {padding:7px 9px;color:#ff6b74;font-size:10px;font-weight:800;letter-spacing:.03em;}
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown(
-        f"""<div class="tp-elite-wrap"><div class="tp-elite-head"><div>
-        <div class="tp-elite-title">ELITE TRADE OPPORTUNITIES</div>
-        <div class="tp-elite-sub">Every active setup graded 9.0/10 or higher across all timeframes.</div>
-        </div><div class="tp-elite-count">{len(priority_candidates)} ELITE SETUP{'S' if len(priority_candidates) != 1 else ''}</div></div></div>""",
-        unsafe_allow_html=True,
-    )
-    if priority_candidates:
-        st.caption("AUTO-JOURNAL ACTIVE / Every 9.0+ elite opportunity is snapshotted once and paper-tracked automatically.")
-    if elite_auto_errors:
-        st.caption(f"Journal capture warning: {len(elite_auto_errors)} elite setup(s) could not be snapshotted on this refresh.")
-    if priority_candidates:
-        elite_cols = st.columns(min(3, len(priority_candidates)), gap="medium")
-        for i, candidate in enumerate(priority_candidates):
-            side = "LONG" if candidate.zone_type == "demand" else "SHORT"
-            arrow = "+ " if side == "LONG" else "- "
-            side_cls = "tp-long" if side == "LONG" else "tp-short"
-            arrow_cls = "tp-up" if side == "LONG" else "tp-down"
-            try:
-                elite_plan = planned_trade_metrics(candidate, market_state)
-            except Exception:
-                elite_plan = {}
-            with elite_cols[i % len(elite_cols)]:
-                st.markdown(
-                    f"""<div class="tp-opp-card">
-                      <div class="tp-opp-top"><span class="{side_cls}">{side}</span><span>{active_symbol}</span><span class="{arrow_cls}">{arrow}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Grade</span><span>{score10(candidate.setup_score)}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Timeframe</span><span>{candidate.timeframe} {candidate.zone_type.upper()}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Entry</span><span>{money(elite_plan.get('entry'))}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Stop</span><span>{money(elite_plan.get('stop'))}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Target 1</span><span>{money(elite_plan.get('t1'))}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Target 2</span><span>{money(elite_plan.get('t2'))}</span></div>
-                      <div class="tp-opp-meta">{candidate.lifecycle.replace('_',' ')} / {candidate.distance_points:.2f} pts from zone</div>
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-                if st.button("LOAD THIS SETUP", key=f"elite_load_{candidate.candidate_id}", width="stretch"):
-                    tf_display = {"D": "1D", "W": "1W"}.get(candidate.timeframe, candidate.timeframe)
-                    if tf_display in CHART_TIMEFRAMES:
-                        st.session_state.chart_tf = tf_display
-                    st.session_state.focused_candidate_id = candidate.candidate_id
-                    st.session_state[f"preferred_candidate_{tf_display}"] = candidate.candidate_id
-                    st.rerun()
-    else:
-        st.caption("No active setup currently meets the 9.0/10 approaching/in-zone threshold.")
-
     # Put chart timeframe controls immediately above the chart workspace.
     st.markdown(
         '<div class="tp-live-market-row"><div class="tp-command-kicker">PRICE ACTION</div>'
@@ -1924,7 +2538,7 @@ with dashboard_tab:
 
     selected_tf = st.session_state.chart_tf
 
-    # V3.3F: fixed-height decision strip directly between timeframe selection and chart.
+    # Legacy foundation: fixed-height decision strip directly between timeframe selection and chart.
     # News is intentionally bounded so a busy calendar never pushes the chart down.
     news_col, toolkit_col = st.columns([1.0, 1.45], gap="medium")
     with news_col:
@@ -2009,7 +2623,7 @@ with dashboard_tab:
         st.session_state.layer_ema9 = False
         st.caption("Display controls only. Trading Pulse analysis remains synchronized across the dashboard.")
 
-    # Load active timeframe data once; OHLC metrics render directly beneath the chart.
+    # Load active timeframe data once; OHLC metrics render directly above the chart.
     try:
         chart_df = get_chart_data(selected_tf, 260, active_symbol)
     except Exception:
@@ -2026,7 +2640,7 @@ with dashboard_tab:
     }
     candidate_tf = {"1D": "D", "1W": "W"}.get(selected_tf, selected_tf)
     visible_29a = filter_candidates(
-        candidates_212,
+        canonical_candidates,
         minimum_grade=st.session_state.zone_quality,
         enabled_grades=enabled_29a,
         relevant_timeframes={candidate_tf},
@@ -2055,6 +2669,14 @@ with dashboard_tab:
             f'<span>{DISPLAY_SYMBOL} / {MARKET_NAME} &nbsp;&bull;&nbsp; TIMEFRAME <b>{selected_tf}</b></span>'
             f'<span style="font-size:1.20rem">LAST {money(chart_price)}</span></div>',
             unsafe_allow_html=True)
+        if chart_df is not None and len(chart_df) >= 1:
+            last_candle = chart_df.iloc[-1]
+            o1,o2,o3,o4 = st.columns(4)
+            o1.metric("OPEN", money(last_candle["open"]))
+            o2.metric("HIGH", money(last_candle["high"]))
+            o3.metric("LOW", money(last_candle["low"]))
+            o4.metric("CLOSE", money(last_candle["close"]))
+
         try:
             if chart_df is not None and len(chart_df) >= 5:
                 chart = build_candlestick_chart(
@@ -2064,6 +2686,7 @@ with dashboard_tab:
                     show_execution=st.session_state.layer_execution,
                     show_conflict=st.session_state.layer_conflict,
                     focused_candidate_id=st.session_state.get("focused_candidate_id"),
+                    candidates=canonical_candidates,
                     show_sma20=st.session_state.layer_sma20,
                     show_sma50=st.session_state.layer_sma50,
                     show_sma200=st.session_state.layer_sma200,
@@ -2078,10 +2701,25 @@ with dashboard_tab:
                     show_grade_b=st.session_state.zone_grade_b,
                     show_grade_c=st.session_state.zone_grade_c,
                 )
-                if chart is not None:
+                rendered_tv = render_tradingview_lightweight_chart(
+                    chart_df, selected_tf, market_state,
+                    focused_candidate_id=st.session_state.get("focused_candidate_id"),
+                    candidates=canonical_candidates,
+                    show_context=st.session_state.layer_context,
+                    show_execution=st.session_state.layer_execution,
+                    show_conflict=st.session_state.layer_conflict,
+                    show_sma20=st.session_state.layer_sma20,
+                    show_sma50=st.session_state.layer_sma50,
+                    show_sma200=st.session_state.layer_sma200,
+                    show_ema9=st.session_state.layer_ema9,
+                    show_ema21=st.session_state.layer_ema21,
+                    show_vwap=st.session_state.layer_vwap,
+                    show_volume=st.session_state.layer_volume,
+                )
+                if not rendered_tv and chart is not None:
                     st.altair_chart(chart, width="stretch")
 
-                note = f"{len(chart_df):,} candles / Minimum potential grade {st.session_state.zone_quality}"
+                note = f"{len(chart_df):,} candles / TradingView Lightweight Charts / Minimum potential grade {st.session_state.zone_quality}"
                 if selected_tf == "30m":
                     note += " / 30m resampled from 15m"
                 st.markdown(f'<div class="tp-footnote">{note} / Trading Pulse analysis remains synchronized across the dashboard.</div>',
@@ -2091,17 +2729,9 @@ with dashboard_tab:
         except Exception as exc:
             st.error(f"Chart error: {exc}")
 
-        if chart_df is not None and len(chart_df) >= 1:
-            last_candle = chart_df.iloc[-1]
-            o1,o2,o3,o4 = st.columns(4)
-            o1.metric("OPEN", money(last_candle["open"]))
-            o2.metric("HIGH", money(last_candle["high"]))
-            o3.metric("LOW", money(last_candle["low"]))
-            o4.metric("CLOSE", money(last_candle["close"]))
-
         st.markdown('<div class="tp-section-rule"></div>', unsafe_allow_html=True)
 
-        # V3.3B: the old quick setup buttons were redundant with the canonical selector below.
+        # Legacy foundation: the old quick setup buttons were redundant with the canonical selector below.
         if visible_29a:
             setup_labels = [
                 (
@@ -2123,7 +2753,7 @@ with dashboard_tab:
             selected_default = int(st.session_state.get(selected_key, 0) or 0)
             selected_default = min(max(selected_default, 0), len(visible_29a) - 1)
 
-            # V3.3H: direct setup buttons replace the redundant dropdown.
+            # Legacy foundation: direct setup buttons replace the redundant dropdown.
             # Presentation/navigation only; canonical candidates remain unchanged.
             st.markdown(
                 f"<div style='color:#9aa6b5;font-size:.68rem;font-weight:800;"
@@ -2159,7 +2789,7 @@ with dashboard_tab:
             with journal_col:
                 if st.button("ADD TO JOURNAL", type="primary", width="stretch", key=f"journal_add_{setup.candidate_id}"):
                     try:
-                        trade_id, created = add_candidate_to_journal(setup, plan, engine_version="3.3C", source="LIVE_PAPER")
+                        trade_id, created = add_candidate_to_journal(setup, plan, engine_version="3.4", source="LIVE_PAPER")
                         if created:
                             st.success(f"Trade #{trade_id} added. Tracking begins from this snapshot.")
                         else:
@@ -2192,9 +2822,12 @@ with dashboard_tab:
                 )
             st.caption("Paper tracking only. Original entry / stop / targets / grade are frozen when added.")
             if lifecycle.trade_ready:
-                st.success("TRADE READY - confirmation and risk checks are satisfied.")
+                st.success("TRADE READY - confirmation and risk checks are satisfied.")
             else:
-                st.warning(f"PLANNED / NOT EXECUTABLE - {lifecycle.reason}")
+                st.warning(f"PLANNED / NOT EXECUTABLE - {lifecycle.reason}")
+
+            st.markdown('<div class="tp-section-rule"></div>', unsafe_allow_html=True)
+            render_selected_setup_professor(market_state, setup, lifecycle, plan)
         else:
             st.markdown("### TRADE SETUP")
             st.info(f"No {selected_tf} trade setup survives the current quality and visibility filters.")
@@ -2215,16 +2848,74 @@ with dashboard_tab:
             target_cols = st.columns(len(trade.targets))
             for idx,target in enumerate(trade.targets):
                 target_cols[idx].metric(target.name, money(target.price), f"{target.rr_ratio:.1f}R")
-        ready_candidates = build_setup_candidates(market_state)
+        ready_candidates = canonical_candidates
         selected_candidate = next((c for c in ready_candidates if c.is_selected_zone), None)
         execution_snapshot = build_execution_lifecycle(market_state, selected_candidate)
-        st.success("BROKER GATE: ELIGIBLE FOR ORDER ROUTING - account risk/quantity authorization still required.")
+        st.success("BROKER GATE: ELIGIBLE FOR ORDER ROUTING - account risk/quantity authorization still required.")
         with st.expander("Broker-ready deterministic order packet", expanded=False):
             st.json(broker_order_intent(market_state, selected_candidate), expanded=False)
 
-    # V3.3I: Market Structure and Professor presentation moved off Command Center.
-    # Their underlying MarketState / professor payload logic remains intact for
-    # scoring, evidence, research, and the forthcoming dedicated Professor surface.
+    # Secondary global diagnostics live at the bottom so the chart and selected trade remain primary.
+    st.divider()
+    render_section("SECONDARY INTELLIGENCE", "Watch List & Elite Diagnostics")
+    st.caption("Research and scan diagnostics are intentionally below the trading workspace. They do not create journal entries or change trading rules.")
+
+    watch_opportunities = elite_diagnostics.get("watch_opportunities", [])
+    with st.expander(f"WATCH LIST ({len(watch_opportunities)})", expanded=False):
+        st.caption(f"Structurally valid {WATCH_MIN_SCORE/10.0:.1f}-{(ELITE_MIN_SCORE-.1)/10.0:.1f}/10 setups. Watch is not Elite and does not create journal entries.")
+        if watch_opportunities:
+            for opportunity in watch_opportunities:
+                c = opportunity.candidate
+                arrow = "&#8593;" if opportunity.direction == "LONG" else "&#8595;"
+                cls = "tp-up" if opportunity.direction == "LONG" else "tp-down"
+                st.markdown(f"**{opportunity.symbol}** <span class='{cls}'>{arrow}</span> {opportunity.direction} &nbsp; | &nbsp; {c.timeframe} {c.zone_type.upper()} &nbsp; | &nbsp; {score10(c.setup_score)} &nbsp; | &nbsp; Composite {opportunity.composite_score/10.0:.1f}/10 &nbsp; | &nbsp; MTF {opportunity.mtf_aligned}/{opportunity.mtf_total} &nbsp; | &nbsp; RR {c.projected_rr:.2f}", unsafe_allow_html=True)
+        else:
+            st.caption("No structurally valid Watch setups right now.")
+
+    with st.expander("WHY THESE ELITE SETUPS?", expanded=False):
+        _g = elite_diagnostics.get("global", {})
+        st.caption("Read-only diagnostics. Elite and Watch share the same composite structural policy; 1m/5m are confirmation-only.")
+        _funnel_cols = st.columns(5)
+        _funnel_cols[0].metric("RAW", int(_g.get("raw", 0)))
+        _funnel_cols[1].metric("8.5+ SCORE", int(_g.get("score_8_5", 0)))
+        _funnel_cols[2].metric("ACTIVE", int(_g.get("active_lifecycle", 0)))
+        _funnel_cols[3].metric("VALID + MTF", int(_g.get("mtf_40", 0)))
+        _funnel_cols[4].metric("ELITE", int(_g.get("elite", 0)))
+
+        _rows = []
+        for _symbol, _report in elite_diagnostics.get("markets", {}).items():
+            _s = _report.get("stages", {})
+            _rows.append({
+                "Market": _symbol, "Raw": int(_s.get("raw", 0)), "8.5+": int(_s.get("score_8_5", 0)),
+                "Active": int(_s.get("active_lifecycle", 0)), "Quality": int(_s.get("zone_quality_75", 0)),
+                "Fresh": int(_s.get("freshness_70", 0)), "Retests": int(_s.get("retests_le_1", 0)),
+                "RR Valid": int(_s.get("rr_valid", 0)), "MTF": int(_s.get("mtf_40", 0)), "Elite": int(_s.get("elite", 0)),
+            })
+        if _rows:
+            st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch")
+
+        _rejections = elite_diagnostics.get("rejections", {})
+        if _rejections:
+            _reason_names = {
+                "score_below_8_5": "Score below 8.5", "confirmation_timeframe_only": "1m/5m confirmation-only",
+                "rr_unavailable": "Projected R:R unavailable", "rr_implausible_above_50": "Projected R:R above sanity ceiling",
+                "inactive_lifecycle": "Not active / approaching", "timeframe_not_elite": "Timeframe excluded",
+                "zone_quality_below_75": "Zone quality below 75", "freshness_below_70": "Freshness below 70",
+                "too_many_retests": "More than 1 retest", "rr_below_2": "Projected R:R below 2.0",
+                "mtf_below_40pct": "MTF agreement below 40%", "same_idea_duplicate": "Collapsed duplicate idea",
+            }
+            _reason_rows = [{"First rejection reason": _reason_names.get(k, k), "Candidates": int(v)} for k, v in sorted(_rejections.items(), key=lambda item: -item[1]) if int(v) > 0]
+            if _reason_rows:
+                st.dataframe(pd.DataFrame(_reason_rows), hide_index=True, width="stretch")
+        if elite_diagnostics.get("errors"):
+            st.warning("Some markets could not be diagnosed: " + ", ".join(elite_diagnostics["errors"].keys()))
+
+    with st.expander("ADVANCED / SYSTEM DETAILS", expanded=False):
+        st.caption("Low-frequency technical detail stays available without competing with the trading workflow.")
+        st.write(f"Canonical candidates loaded: {len(canonical_candidates)}")
+        st.write(f"Active symbol: {active_symbol} | Chart timeframe: {selected_tf}")
+        st.write(f"Elite threshold: {ELITE_MIN_SCORE/10.0:.1f}/10 | Watch threshold: {WATCH_MIN_SCORE/10.0:.1f}/10")
+        st.write("MarketState remains the single source of truth. Professor explanations do not alter execution rules.")
 
 
 # ---------------------------------------------------------------------
@@ -2533,7 +3224,7 @@ with backtest_tab:
                 rows=[]
                 for x in recent:
                     sm=x.get("summary",{}) or {}
-                    rows.append({"Market":x["symbol"],"Scope":x["scope"],"Grade":f'{float(x["min_score"]):.1f}+',"Lookback":f'{x["days"]}d',"Direction":x["direction"],"Setups":sm.get("events","--"),"Avg R":sm.get("avg_r","--")})
+                    rows.append({"Market":x["symbol"],"Scope":x["scope"],"Grade":f'{float(x["min_score"]):.1f}+',"Lookback":f'{x["days"]}d',"Direction":x["direction"],"Setups":str(sm.get("events","--")),"Avg R":sm.get("avg_r","--")})
                 st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
             else:
                 st.markdown('<div class="bt-empty" style="height:150px">Completed experiments will be saved here for comparison and reuse.</div>', unsafe_allow_html=True)
@@ -2571,7 +3262,7 @@ with backtest_tab:
 # ---------------------------------------------------------------------
 
 
-# === V3.3K SELECTION STATE DESIGN SYSTEM ===
+# === V3.4 SELECTION STATE DESIGN SYSTEM ===
 st.markdown("""
 <style>
 
@@ -2633,7 +3324,7 @@ div[data-testid="stButton"] > button:focus-visible {
 
 </style>
 """, unsafe_allow_html=True)
-# === END V3.3K SELECTION STATE DESIGN SYSTEM ===
+# === END V3.4 SELECTION STATE DESIGN SYSTEM ===
 
 # ---------------------------------------------------------------------
 # FOOTER
@@ -2654,4 +3345,126 @@ st.markdown(
 
 
 
+
+
+
+
+
+# ---------------------------------------------------------------------
+# PROFESSOR / BEGINNER ACADEMY - V3.4 PASS 5
+# ---------------------------------------------------------------------
+
+with professor_tab:
+    st.write("")
+    render_section("AI FUTURES PROFESSOR", "Learn the Market. Then Practice the Process.")
+    st.caption(
+        "Beginner Academy teaches paper execution step by step. Live-market answers use "
+        "the exact canonical MarketState already shown in Command Center."
+    )
+
+    academy_tab, ask_tab, analytics_tab = st.tabs(["BEGINNER ACADEMY", "ASK PROFESSOR", "RESEARCH ANALYTICS"])
+
+    with academy_tab:
+        lessons = academy_lessons()
+        completed = set(st.session_state.get("academy_completed", []))
+        st.progress(len(completed) / max(len(lessons), 1))
+        st.caption(f"{len(completed)} OF {len(lessons)} LESSONS COMPLETED")
+
+        for lesson in lessons:
+            lesson_id = int(lesson["id"])
+            done = lesson_id in completed
+            marker = "COMPLETE" if done else f"LESSON {lesson_id}"
+            with st.expander(f"{marker}  |  {lesson['title']}", expanded=(lesson_id == 1 and not completed)):
+                st.markdown(f"**GOAL:** {lesson['goal']}")
+                st.write(lesson["body"])
+                st.info(f"CHECKPOINT: {lesson['check']}")
+                if lesson_id == 2:
+                    st.link_button("OPEN TRADINGVIEW", "https://www.tradingview.com/")
+                if st.checkbox(
+                    "I understand this lesson",
+                    value=done,
+                    key=f"academy_done_{lesson_id}",
+                ):
+                    completed.add(lesson_id)
+                else:
+                    completed.discard(lesson_id)
+
+        st.session_state["academy_completed"] = sorted(completed)
+        if len(completed) == len(lessons):
+            st.success("BEGINNER ACADEMY COMPLETE - continue practicing with Paper Trading before considering live execution.")
+
+    with ask_tab:
+        st.markdown("### ASK ABOUT THE CURRENT SCREEN")
+        st.caption(
+            "The Professor may explain canonical Trading Pulse facts, but it cannot invent "
+            "prices, zones, probabilities, entries, stops, or targets."
+        )
+        question = st.text_input(
+            "Your question",
+            placeholder="Example: Why is this setup waiting instead of ready?",
+            key="professor_live_question",
+        )
+        if st.button("ASK PROFESSOR", type="primary", key="professor_ask_button"):
+            packet = answer_question(question, market_state.professor_payload(), research_mode=True)
+            st.session_state["professor_last_packet"] = packet
+
+        packet = st.session_state.get("professor_last_packet")
+        if packet:
+            st.markdown(professor_md(packet.get("answer", "")))
+            sources = packet.get("sources") or []
+            if sources:
+                with st.expander("GROUNDING SOURCES", expanded=False):
+                    for source in sources:
+                        label = source.get("title") or source.get("domain") or "FuturesProf source"
+                        st.write(f"- {label} | {source.get('domain','')} | {source.get('source_type','GROUNDED')}")
+
+        with st.expander("CANONICAL MARKETSTATE PACKET", expanded=False):
+            st.json(market_state.professor_payload(), expanded=False)
+
+    with analytics_tab:
+        st.markdown("### PROFESSOR RESEARCH & LEARNING ANALYTICS")
+        st.caption("Questions are telemetry. Research claims stay quarantined until reviewed; they do not silently become truth.")
+        m = get_professor_metrics()
+        a1,a2,a3,a4,a5 = st.columns(5)
+        a1.metric("QUESTIONS", m.get("questions",0))
+        a2.metric("WEB RESEARCH", m.get("researched",0))
+        a3.metric("RESEARCH RATE", f"{m.get('research_pct',0):.0f}%")
+        a4.metric("KNOWLEDGE GAPS", m.get("knowledge_gaps",0))
+        a5.metric("AVG SOURCES", f"{m.get('avg_sources',0):.1f}")
+        claim_counts=m.get("claims",{}) or {}
+        st.markdown("#### CLAIM VERIFICATION QUEUE")
+        st.caption("PENDING is not learned truth. Promote only after checking evidence; reject conflicts or weak claims.")
+        st.write(" · ".join(f"{k}: {v}" for k,v in sorted(claim_counts.items())) or "No research claims yet.")
+        pending=get_pending_professor_claims(20)
+        for claim in pending:
+            with st.expander(f"{claim.get('verification_status')} · {claim.get('sources',0)} source(s) · claim {claim.get('id')}", expanded=False):
+                st.write(claim.get("claim_text",""))
+                c1,c2,c3,c4=st.columns(4)
+                if c1.button("CORROBORATE", key=f"claim_cor_{claim['id']}"):
+                    review_professor_claim(int(claim['id']),"CORROBORATED","Manual review: corroborated")
+                    st.rerun()
+                if c2.button("VERIFY", key=f"claim_ver_{claim['id']}"):
+                    review_professor_claim(int(claim['id']),"VERIFIED","Manual review: verified")
+                    st.rerun()
+                if c3.button("CONFLICT", key=f"claim_con_{claim['id']}"):
+                    review_professor_claim(int(claim['id']),"CONFLICTED","Manual review: conflicting evidence")
+                    st.rerun()
+                if c4.button("REJECT", key=f"claim_rej_{claim['id']}"):
+                    review_professor_claim(int(claim['id']),"REJECTED","Manual review: rejected")
+                    st.rerun()
+        st.markdown("#### RECENT QUESTIONS")
+        recent=get_recent_professor_questions(20)
+        if recent:
+            st.dataframe(recent, width="stretch", hide_index=True)
+        else:
+            st.caption("Ask the Professor questions to begin building coverage metrics.")
+        if professor_research_available():
+            st.success("OPENAI RESEARCH CONNECTION: READY")
+        else:
+            st.warning("OPENAI RESEARCH CONNECTION: API KEY NOT CONFIGURED")
+
+    st.warning(
+        "EDUCATION / PAPER PRACTICE: The Professor explains the system and futures concepts. "
+        "It does not guarantee outcomes and does not place trades."
+    )
 

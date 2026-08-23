@@ -1,16 +1,31 @@
 #!/bin/bash
 set -e
 
+MODE="${1:-web}"
+
 echo "========================================"
-echo " TRADING PULSE V2.5.1 STARTUP"
+echo " TRADING PULSE STARTUP"
+echo " MODE: ${MODE}"
 echo "========================================"
 
 echo ""
-echo "[1/3] Creating/verifying PostgreSQL tables..."
+echo "[1/2] Creating/verifying PostgreSQL tables..."
 python -c "from core.database import create_tables; create_tables()"
 
+if [ "$MODE" != "worker" ]; then
+    echo ""
+    echo "[2/2] Web startup: historical refresh skipped."
+    echo "Historical maintenance is worker-owned."
+    echo ""
+    echo "========================================"
+    echo " TRADING PULSE WEB STARTUP COMPLETE"
+    echo "========================================"
+    exit 0
+fi
+
 echo ""
-echo "[2/3] Checking historical database..."
+echo "[2/2] Worker-owned historical maintenance..."
+
 python -c "
 from core.database import get_connection
 
@@ -31,8 +46,6 @@ else:
     print('Historical daily database already initialized.')
 "
 
-echo ""
-echo "[3/3] Updating V2.5.1 MarketState timeframes..."
 python -c "
 from core.data_engine import fetch_and_store
 
@@ -56,10 +69,10 @@ for timeframe, period in jobs:
         print(f'WARNING: {timeframe} update failed: {exc}')
 
 print()
-print('V2.5.1 market data refresh complete.')
+print('Worker historical market data refresh complete.')
 "
 
 echo ""
 echo "========================================"
-echo " TRADING PULSE STARTUP COMPLETE"
+echo " TRADING PULSE WORKER STARTUP COMPLETE"
 echo "========================================"

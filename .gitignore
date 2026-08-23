@@ -89,4 +89,17 @@ V2_*CHATGPT*
 CURRENT_DASHBOARD_FOR_FIX.py
 dashboard_before_*.py
 dashboard_v2_*_backup.py
+# V3/V3.4 local development harnesses
+TEST_V3_*.py
+INSTALL_TRADING_PULSE_*.ps1
+RUN_V3_*.ps1
+TRADING_PULSE_V*.py
+V3_STARTING_SOURCE.txt
 
+# Local research/evidence cache (never production source of truth)
+research_data/
+
+# Local audit/export bundles
+*_PROJECT_MANIFEST.txt
+*_PYTHON_COMPILE_AUDIT.txt
+TradingPulse_*.zip

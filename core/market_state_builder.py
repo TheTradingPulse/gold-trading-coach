@@ -61,7 +61,7 @@ from market_clock import MarketClock, live_clock, replay_clock, normalize_timest
 from setup_fingerprint import build_setup_fingerprint
 from setup_candidate_engine import build_setup_candidates
 from data_integrity import evaluate_feed_status
-from market_data_provider import fetch_market_data
+from market_data_provider import fetch_market_data, prefetch_market_data
 from market_state import (
     MarketState,
     ZoneState,
@@ -730,6 +730,13 @@ def build_market_state(
     state = create_empty_market_state(
         instrument.root_symbol
     )
+
+    # V3.4 PASS 2A: warm each unique live provider request once, in parallel.
+    # Replay/as_of builds intentionally bypass this path to preserve point-in-time
+    # database/replay semantics. Subsequent price/trend/zone/lifecycle reads reuse
+    # the provider cache instead of redownloading the same Yahoo history.
+    if cutoff is None:
+        prefetch_market_data(instrument.root_symbol, TIMEFRAMES)
 
     (
         price,

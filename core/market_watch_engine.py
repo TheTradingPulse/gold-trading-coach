@@ -5,6 +5,7 @@ There is no independent watch-only price feed.
 """
 from __future__ import annotations
 from typing import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 from market_state_builder import load_market_data, get_latest_market_price
 from instruments import get_instrument
@@ -36,12 +37,22 @@ def _one_snapshot(root: str) -> dict:
             "price_timeframe":price_timeframe,"source":"CANONICAL_MARKET_DATA"}
 
 def fetch_market_watch(symbols: Iterable[str] | None=None) -> dict[str,dict]:
-    requested=[str(s).upper() for s in (symbols or MARKETS.keys())]; result={}
-    for root in requested:
-        if root not in MARKETS: continue
-        try: result[root]=_one_snapshot(root)
-        except Exception as exc:
-            meta=MARKETS[root]; result[root]={"root_symbol":root,"name":meta["name"],"data_symbol":meta["data_symbol"],
-                "price":None,"previous_close":None,"change":None,"change_pct":None,"sparkline":[],"timestamp":None,
-                "source":"CANONICAL_MARKET_DATA","error":str(exc)}
-    return result
+    """Fetch independent market cards concurrently while preserving requested order."""
+    requested=[str(s).upper() for s in (symbols or MARKETS.keys())]
+    requested=[root for root in requested if root in MARKETS]
+    if not requested: return {}
+
+    snapshots={}
+    workers=max(1,min(8,len(requested)))
+    with ThreadPoolExecutor(max_workers=workers,thread_name_prefix="tp-market-watch") as pool:
+        futures={pool.submit(_one_snapshot,root): root for root in requested}
+        for future in as_completed(futures):
+            root=futures[future]
+            try:
+                snapshots[root]=future.result()
+            except Exception as exc:
+                meta=MARKETS[root]
+                snapshots[root]={"root_symbol":root,"name":meta["name"],"data_symbol":meta["data_symbol"],
+                    "price":None,"previous_close":None,"change":None,"change_pct":None,"sparkline":[],"timestamp":None,
+                    "source":"CANONICAL_MARKET_DATA","error":str(exc)}
+    return {root:snapshots[root] for root in requested}
