@@ -1,16 +1,19 @@
 import os
 from datetime import date, timedelta
-
-os.environ["DATABASE_URL"] = "postgresql://postgres:iAwDrcIkfdLpbjScbZlhaqNEcbcbPWIF@hayabusa.proxy.rlwy.net:57737/railway"
-
 import psycopg2
 import sys
 sys.path.insert(0, "core")
 
 from polygon_engine import fetch_and_store
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required. Credentials must never be embedded in source code.")
+if os.getenv("ALLOW_DATA_RESET") != "YES":
+    raise RuntimeError("Destructive maintenance blocked. Set ALLOW_DATA_RESET=YES explicitly.")
+
 # Delete only wrong intraday data
-conn = psycopg2.connect(os.environ["DATABASE_URL"])
+conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
 for tf in ["15m", "1H", "4H"]:
     cur.execute("DELETE FROM gold_ohlcv WHERE timeframe = %s", (tf,))

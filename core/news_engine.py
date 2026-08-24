@@ -126,7 +126,7 @@ def generate_news_warning():
         message = f"📅 *UPCOMING:* {upcoming[0]['event']} in {upcoming[0]['hours_until']} hours"
         return message, "LOW"
     
-    return "✅ No major economic events in the next 48 hours.", "CLEAR"
+    return "Economic calendar not verified by a live authoritative feed. Check your trading calendar before entry.", "UNVERIFIED"
 
 
 def display_news_calendar():

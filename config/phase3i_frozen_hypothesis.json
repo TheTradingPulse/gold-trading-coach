@@ -1,0 +1,17 @@
+{
+  "schema": "TP_PHASE3I_FROZEN_HYPOTHESIS_1",
+  "symbol": "GC",
+  "detector": "TP_CANONICAL_PROFESSIONAL_ZONE_1",
+  "entry": "original proximal entry",
+  "stop": "max(original structural stop, 1.0 x point-in-time 5-minute ATR14)",
+  "target": "5R",
+  "entry_fill_window_minutes": 120,
+  "outcome_horizon_minutes": 14400,
+  "overlap_purge_minutes": 240,
+  "confirmation_start": "2026-01-01T00:00:00Z",
+  "confirmation_end_exclusive": "2026-08-23T19:00:00Z",
+  "risk_basis": "nominal $50,000",
+  "risk_budgets": [500, 1000, 1500],
+  "parameter_search_allowed": false,
+  "live_promotion": false
+}

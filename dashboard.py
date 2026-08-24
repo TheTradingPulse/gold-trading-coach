@@ -17,6 +17,7 @@ This source is intentionally ASCII-only to avoid Windows PowerShell / cp1252
 encoding corruption.
 """
 
+import os
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -48,9 +49,11 @@ from journal_tracker import add_candidate_to_journal, refresh_tracked_trades, en
 from dna_engine import analyze_dna_performance
 from news_engine import generate_news_warning, display_news_calendar
 from backtest_engine import run_backtest, get_available_years
-from backtest_lab_engine import run_lab_backtest, evidence_stats, recent_experiments, TF_SETS
+from backtest_lab_engine import evidence_stats, recent_experiments, TF_SETS
 from market_watch_engine import fetch_market_watch
 from multi_market_elite_engine import scan_elite_snapshot, ELITE_MIN_SCORE, WATCH_MIN_SCORE
+from live_grading_service import grade_live_candidate, has_live_star
+from data_truth_service import truth_status, allow_manual_backtest
 from instruments import get_instrument, get_enabled_symbols
 from professor_engine import (
     academy_lessons, answer_question, get_pending_professor_claims,
@@ -70,7 +73,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st_autorefresh(interval=60 * 1000, key="tp_auto_refresh")
+AUTO_REFRESH_SECONDS = max(60, int(os.getenv("TP_AUTO_REFRESH_SECONDS", "120")))
+if os.getenv("TP_AUTO_REFRESH_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
+    st_autorefresh(interval=AUTO_REFRESH_SECONDS * 1000, key="tp_auto_refresh")
 
 
 # ---------------------------------------------------------------------
@@ -97,7 +102,7 @@ MUTED = "#b3bdcb"
 GREEN = "#22c55e"
 RED = "#ef4444"
 BLUE = "#3b82f6"
-AMBER = "#f59e0b"
+AMBER = BLUE  # A+ RC: neutral informational accent; no amber/gold UI accent
 
 CHART_TIMEFRAMES = {
     "1m": "1m",
@@ -889,7 +894,7 @@ def get_news_state():
         return "Economic-event status unavailable.", "UNKNOWN"
 
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=110, show_spinner=False)
 def get_market_watch():
     return fetch_market_watch(MARKET_WATCH_ORDER)
 
@@ -955,7 +960,7 @@ def resample_30m(df):
     )
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_chart_data(display_tf, limit=260, symbol="GC"):
     db_tf = CHART_TIMEFRAMES[display_tf]
     if display_tf == "30m":
@@ -964,15 +969,30 @@ def get_chart_data(display_tf, limit=260, symbol="GC"):
     return load_market_data(db_tf, limit=limit, symbol=symbol)
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def get_market_state(symbol="GC"):
     return build_market_state(symbol)
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=110, show_spinner=False)
 def get_global_elite_snapshot():
     """Global Elite board plus explainable funnel diagnostics from one shared scan."""
     return scan_elite_snapshot(get_enabled_symbols(), limit=6)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_evidence_stats():
+    return evidence_stats()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_recent_experiments(limit=5):
+    return recent_experiments(limit)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_professor_metrics_cached():
+    return get_professor_metrics()
 
 
 def get_zone_model(state):
@@ -1257,7 +1277,7 @@ html,body,#chart{{margin:0;width:100%;height:100%;background:#07090d;overflow:hi
 #wrap{{height:720px;border:1px solid #36404e;border-radius:0 0 9px 9px;overflow:hidden;background:#07090d}}
 #chart{{height:100%}}
 #badge{{position:absolute;z-index:5;left:12px;top:10px;background:rgba(7,9,13,.78);border:1px solid #242c39;border-radius:7px;padding:6px 9px;color:#9fa9b7;font:600 11px system-ui;pointer-events:none}}
-</style></head><body><div id="wrap"><div id="badge">TRADINGVIEW CHART ENGINE &bull; {timeframe_label} &bull; TRADING PULSE DATA</div><div id="chart"></div></div>
+</style></head><body><div id="wrap"><div id="badge">TRADINGVIEW CHART ENGINE &bull; {timeframe_label} &bull; YAHOO DELAYED REFERENCE DATA</div><div id="chart"></div></div>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 const payload={payload};
@@ -2261,6 +2281,17 @@ canonical_candidates = build_setup_candidates(market_state)
 
 health, age_minutes = data_health(market_state.market_timestamp)
 news_warning, news_level = get_news_state()
+data_truth = truth_status()
+try:
+    market_watch_snapshot = get_market_watch()
+except Exception:
+    market_watch_snapshot = {}
+_watch_price = safe_float((market_watch_snapshot.get(active_symbol) or {}).get("price"))
+_state_price = safe_float(market_state.current_price)
+market_data_integrity_ok = True
+if _watch_price is not None and _state_price is not None:
+    _active_tick = max(float(get_instrument(active_symbol).tick_size), 1e-12)
+    market_data_integrity_ok = abs(_watch_price - _state_price) / _active_tick <= 1.01
 
 
 # ---------------------------------------------------------------------
@@ -2289,6 +2320,10 @@ command_tabs = ["COMMAND CENTER", "JOURNAL", "BACKTEST", "PROFESSOR"]
 dashboard_tab, journal_tab, backtest_tab, professor_tab = st.tabs(command_tabs)
 
 with dashboard_tab:
+    st.warning(
+        f"DATA STATUS - Market: {data_truth.market_source} (delayed / not execution eligible). "
+        f"Evidence: {data_truth.evidence_source or 'not installed'}. {data_truth.warning}"
+    )
     # V3.4 Pass 3A: global multi-market / multi-timeframe Elite board.
     # The selected chart does not control opportunity discovery.
     # This is presentation only: no journal writes occur during Streamlit rendering.
@@ -2331,15 +2366,32 @@ with dashboard_tab:
             if not scan_candidates:
                 continue
 
+            graded_candidates = [
+                (candidate, grade_live_candidate(candidate, scan_state, scan_symbol))
+                for candidate in scan_candidates
+            ]
+            promoted_candidates = [pair for pair in graded_candidates if pair[1]["tier"] == "V4 ELITE"]
             elite_opportunity = elite_by_symbol.get(scan_symbol)
-            if elite_opportunity is not None:
+            if promoted_candidates:
+                best_candidate, v4_grade = max(
+                    promoted_candidates,
+                    key=lambda pair: (
+                        safe_float(pair[1].get("confidence10"), 0.0) or 0.0,
+                        safe_float(getattr(pair[0], "setup_score", None), 0.0) or 0.0,
+                    ),
+                )
+                composite_score = safe_float(getattr(best_candidate, "setup_score", None), 0.0) or 0.0
+                confirmation_count = 0
+                mtf_aligned = 0
+                mtf_total = 0
+                direction = "LONG" if str(best_candidate.zone_type).lower() == "demand" else "SHORT"
+            elif elite_opportunity is not None:
                 best_candidate = elite_opportunity.candidate
                 composite_score = safe_float(elite_opportunity.composite_score, 0.0) or 0.0
                 confirmation_count = elite_opportunity.confirmation_count
                 mtf_aligned = elite_opportunity.mtf_aligned
                 mtf_total = elite_opportunity.mtf_total
                 direction = elite_opportunity.direction
-                is_elite = composite_score >= ELITE_MIN_SCORE
             else:
                 best_candidate = max(
                     scan_candidates,
@@ -2354,7 +2406,9 @@ with dashboard_tab:
                 mtf_aligned = 0
                 mtf_total = 0
                 direction = "LONG" if str(best_candidate.zone_type).lower() == "demand" else "SHORT"
-                is_elite = False
+            if not promoted_candidates:
+                v4_grade = grade_live_candidate(best_candidate, scan_state, scan_symbol)
+            is_elite = has_live_star(v4_grade)
 
             best_setups.append({
                 "symbol": scan_symbol,
@@ -2366,6 +2420,7 @@ with dashboard_tab:
                 "mtf_total": mtf_total,
                 "direction": direction,
                 "is_elite": is_elite,
+                "v4_grade": v4_grade,
             })
         except Exception:
             continue
@@ -2373,8 +2428,8 @@ with dashboard_tab:
     st.markdown(
         f"""<div class="tp-elite-wrap"><div class="tp-elite-head"><div>
         <div class="tp-elite-title">BEST TRADE SETUPS</div>
-        <div class="tp-elite-sub">Best available setup for each enabled market. A star marks a setup that also passes the strict {ELITE_MIN_SCORE / 10.0:.1f}/10 Elite gate.</div>
-        </div><div class="tp-elite-count">{len(global_elite)} ELITE &#9733;</div></div></div>""",
+        <div class="tp-elite-sub">A star requires A+ structure, promoted evidence, and verified first-touch execution. Evidence matches remain unstarred until stop/target ordering is proven.</div>
+        </div><div class="tp-elite-count">{sum(1 for item in best_setups if item['is_elite'])} V4 ELITE &#9733;</div></div></div>""",
         unsafe_allow_html=True,
     )
 
@@ -2388,10 +2443,15 @@ with dashboard_tab:
             side_cls = "tp-long" if side == "LONG" else "tp-short"
             arrow_cls = "tp-up" if side == "LONG" else "tp-down"
             elite_star = " &#9733;" if item["is_elite"] else ""
-            elite_label = "ELITE" if item["is_elite"] else "BEST AVAILABLE"
+            v4_grade = item["v4_grade"]
+            elite_label = v4_grade["tier"]
+            confidence = v4_grade.get("confidence10")
+            confidence_text = "--" if confidence is None else f"{confidence:.1f}/10"
+            sample_count = int(v4_grade.get('sample') or 0)
+            sample_text = f"{sample_count} triggered" if data_truth.live_promotion and sample_count else "--"
 
             try:
-                setup_plan = planned_trade_metrics(candidate, setup_state)
+                setup_plan = planned_trade_metrics(candidate, setup_state) if market_data_integrity_ok else {}
             except Exception:
                 setup_plan = {}
 
@@ -2405,8 +2465,10 @@ with dashboard_tab:
                     f"""<div class="tp-opp-card">
                       <div class="tp-opp-top"><span class="{side_cls}">{side}</span><span>{item['symbol']}{elite_star}</span><span class="{arrow_cls}">{arrow}</span></div>
                       <div class="tp-opp-row"><span class="tp-opp-label">Status</span><span>{elite_label}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Setup</span><span>{score10(candidate.setup_score)}</span></div>
-                      <div class="tp-opp-row"><span class="tp-opp-label">Elite Composite</span><span>{item['composite_score'] / 10.0:.1f}/10</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Structure Score</span><span>{score10(candidate.setup_score)}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Evidence Confidence</span><span>{confidence_text if data_truth.live_promotion else '--'}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Comparable Sample</span><span>{sample_text}</span></div>
+                      <div class="tp-opp-row"><span class="tp-opp-label">Execution Validation</span><span>{v4_grade.get('execution_status', 'NOT QUALIFIED')}</span></div>
                       <div class="tp-opp-row"><span class="tp-opp-label">Timeframe</span><span>{candidate.timeframe} {candidate.zone_type.upper()}</span></div>
                       <div class="tp-opp-row"><span class="tp-opp-label">MTF Context</span><span>{mtf_text}</span></div>
                       <div class="tp-opp-row"><span class="tp-opp-label">Entry</span><span>{money(setup_plan.get('entry'))}</span></div>
@@ -2432,27 +2494,23 @@ with dashboard_tab:
     else:
         st.caption("No canonical setup candidates are currently available across the enabled markets.")
 
-    # Elite 9.0+ opportunities are journaled automatically for paper tracking.
-    # add_candidate_to_journal is duplicate-safe, so refreshes do not create repeated trades.
-    for elite_opportunity in global_elite:
-        if safe_float(elite_opportunity.composite_score, 0.0) < ELITE_MIN_SCORE:
+    # Only promoted V4 Elite setups may be journaled automatically for paper tracking.
+    for item in best_setups:
+        if not item["is_elite"]:
             continue
         try:
-            elite_plan = planned_trade_metrics(elite_opportunity.candidate, elite_opportunity.market_state)
+            elite_plan = planned_trade_metrics(item["candidate"], item["state"])
             add_candidate_to_journal(
-                elite_opportunity.candidate,
+                item["candidate"],
                 elite_plan,
-                engine_version="3.4",
-                source="ELITE_AUTO",
+                engine_version="4.0-promoted-elite",
+                source="V4_ELITE_AUTO",
             )
         except Exception:
             pass
 
     # Cross-market watch strip. GC is the active full-analysis market.
-    try:
-        market_watch = get_market_watch()
-    except Exception:
-        market_watch = {}
+    market_watch = market_watch_snapshot
 
     # V3.3G canonical-source integrity guard. Market Watch must agree with the
     # same MarketState price boundary used by the chart/analysis pipeline.
@@ -2461,8 +2519,8 @@ with dashboard_tab:
     if _watch_active is not None and _state_active is not None:
         _tick = max(float(get_instrument(active_symbol).tick_size), 1e-12)
         _delta_ticks = abs(_watch_active - _state_active) / _tick
-        if _delta_ticks > 1.01:
-            st.error(f"DATA INTEGRITY BLOCK: {active_symbol} Market Watch ({_watch_active:,.2f}) != canonical MarketState ({_state_active:,.2f}). Refresh/inspect feed before using trade levels.")
+        if not market_data_integrity_ok:
+            st.error(f"DATA INTEGRITY BLOCK: {active_symbol} Market Watch ({_watch_active:,.2f}) != reference MarketState ({_state_active:,.2f}). Exact trade levels and chart overlays are hidden until the feeds agree.")
     render_market_watch(market_watch)
     _switch_cols = st.columns(len(MARKET_WATCH_ORDER))
     for _i, _symbol in enumerate(MARKET_WATCH_ORDER):
@@ -2685,8 +2743,8 @@ with dashboard_tab:
                     show_context=st.session_state.layer_context,
                     show_execution=st.session_state.layer_execution,
                     show_conflict=st.session_state.layer_conflict,
-                    focused_candidate_id=st.session_state.get("focused_candidate_id"),
-                    candidates=canonical_candidates,
+                    focused_candidate_id=st.session_state.get("focused_candidate_id") if market_data_integrity_ok else None,
+                    candidates=canonical_candidates if market_data_integrity_ok else [],
                     show_sma20=st.session_state.layer_sma20,
                     show_sma50=st.session_state.layer_sma50,
                     show_sma200=st.session_state.layer_sma200,
@@ -2703,8 +2761,8 @@ with dashboard_tab:
                 )
                 rendered_tv = render_tradingview_lightweight_chart(
                     chart_df, selected_tf, market_state,
-                    focused_candidate_id=st.session_state.get("focused_candidate_id"),
-                    candidates=canonical_candidates,
+                    focused_candidate_id=st.session_state.get("focused_candidate_id") if market_data_integrity_ok else None,
+                    candidates=canonical_candidates if market_data_integrity_ok else [],
                     show_context=st.session_state.layer_context,
                     show_execution=st.session_state.layer_execution,
                     show_conflict=st.session_state.layer_conflict,
@@ -2782,12 +2840,12 @@ with dashboard_tab:
 
             setup = visible_29a[selected_setup_index]
             lifecycle = build_execution_lifecycle(market_state, setup)
-            plan = planned_trade_metrics(setup, market_state)
+            plan = planned_trade_metrics(setup, market_state) if market_data_integrity_ok else {}
             title_col, journal_col, spacer_col = st.columns([1.0, 0.72, 1.35])
             with title_col:
                 st.markdown("### TRADE SETUP")
             with journal_col:
-                if st.button("ADD TO JOURNAL", type="primary", width="stretch", key=f"journal_add_{setup.candidate_id}"):
+                if st.button("ADD TO JOURNAL", type="primary", width="stretch", key=f"journal_add_{setup.candidate_id}", disabled=not market_data_integrity_ok):
                     try:
                         trade_id, created = add_candidate_to_journal(setup, plan, engine_version="3.4", source="LIVE_PAPER")
                         if created:
@@ -2832,6 +2890,141 @@ with dashboard_tab:
             st.markdown("### TRADE SETUP")
             st.info(f"No {selected_tf} trade setup survives the current quality and visibility filters.")
 
+    # PROFESSOR TRADE BRIEF MOVED TO COMMAND CENTER - V3.4
+    # Full-width Professor intelligence workspace. Widgets remain visible even
+    # before their verified V5 backends are promoted; unavailable values stay blank.
+    st.write("")
+    watch_opportunities = elite_diagnostics.get("watch_opportunities", [])
+    brief_opportunity = watch_opportunities[0] if watch_opportunities else None
+    brief_candidate = focused_candidate
+    brief_state = market_state
+    brief_symbol = active_symbol
+    brief_side = (
+        "LONG" if brief_candidate and str(brief_candidate.zone_type).lower() == "demand" else "SHORT"
+    )
+    brief_status = "WATCH" if brief_opportunity else "RESEARCH PREVIEW"
+    try:
+        brief_plan = planned_trade_metrics(brief_candidate, brief_state) if brief_candidate and market_data_integrity_ok else {}
+    except Exception:
+        brief_plan = {}
+
+    def _brief_value(value, formatter=None):
+        if value is None:
+            return "--"
+        return formatter(value) if formatter else str(value)
+
+    brief_score = safe_float(getattr(brief_candidate, "setup_score", None)) if brief_candidate else None
+    brief_quality = safe_float(getattr(brief_candidate, "zone_quality_score", None)) if brief_candidate else None
+    brief_fresh = safe_float(getattr(brief_candidate, "freshness_score", None)) if brief_candidate else None
+    brief_rr = safe_float(getattr(brief_candidate, "projected_rr", None)) if brief_candidate else None
+    brief_tf = str(getattr(brief_candidate, "timeframe", "--")) if brief_candidate else "--"
+    brief_zone_type = str(getattr(brief_candidate, "zone_type", "--")).upper() if brief_candidate else "--"
+    brief_lifecycle = str(getattr(brief_candidate, "lifecycle", "WAITING")).replace("_", " ") if brief_candidate else "WAITING"
+    brief_mtf = (
+        f"{brief_opportunity.mtf_aligned}/{brief_opportunity.mtf_total}"
+        if brief_opportunity and brief_opportunity.mtf_total else "--"
+    )
+    brief_direction_class = "tp-pw-long" if brief_side == "LONG" else "tp-pw-short"
+    brief_entry = money(brief_plan.get("entry"))
+    brief_stop = money(brief_plan.get("stop"))
+    brief_t1 = money(brief_plan.get("t1"))
+    brief_t2 = money(brief_plan.get("t2"))
+    brief_thesis = (
+        f"A {brief_side} research setup based on a {brief_tf} {brief_zone_type} zone. "
+        "The deterministic engine owns every price level; this workspace explains the decision without changing it."
+        if brief_candidate else
+        "Waiting for the canonical engine to produce a setup worth explaining. No trade is manufactured to fill the screen."
+    )
+    brief_action = {
+        "APPROACHING": "Let price come to the zone. Do not chase. Wait for confirmation and execution viability.",
+        "IN ZONE": "Price is testing structure. A touch alone is not permission to enter.",
+        "QUALIFIED": "Structure is provisionally qualified. Verified V5 evidence must still authorize the grade.",
+    }.get(brief_lifecycle, "Observe the market and wait for every deterministic gate to become explicit.")
+
+    st.markdown("""
+    <style>
+    .tp-pw{border:0;border-radius:0;background:radial-gradient(circle at 72% 3%,rgba(30,91,151,.12),transparent 34%),linear-gradient(145deg,#07111d,#0a1522 58%,#07101a);padding:22px 22px 26px;color:#eef4fb;box-shadow:none}
+    .tp-pw-tag{display:inline-block;background:#28683d;border:1px solid #3d9859;color:#b7f4c2;border-radius:3px;padding:3px 8px;font-size:9px;font-weight:900;letter-spacing:.08em}.tp-pw-tag.preview{background:#183955;border-color:#2e6691;color:#91caf7}
+    .tp-pw-title{font-size:24px;font-weight:950;margin:7px 0 2px}.tp-pw-sub{font-size:12px;color:#91a4b8;max-width:760px;line-height:1.5}
+    .tp-pw-grid{display:grid;grid-template-columns:1.22fr .98fr;gap:24px;margin-top:20px}.tp-pw-block{margin-bottom:20px}.tp-pw-head{font-size:14px;font-weight:900;letter-spacing:.025em;margin-bottom:8px}.tp-pw-blue{color:#58b5ff;margin-right:8px}.tp-pw-red{color:#ff5c58;margin-right:8px}.tp-pw-copy{font-size:13px;line-height:1.68;color:#c1ccd8;padding-left:23px}
+    .tp-pw-roadmap{display:grid;grid-template-columns:1fr 1fr;gap:9px 22px;padding-left:22px}.tp-pw-road{border-left:1px solid #34516c;padding:3px 0 6px 14px;min-height:48px}.tp-pw-road b{display:block;font-size:12px;color:#f6f9fd}.tp-pw-road span{font-size:11px;color:#8fa0b2}
+    .tp-pw-card{border:1px solid #2b4056;border-radius:6px;background:rgba(13,26,41,.76);padding:13px;margin-bottom:12px}.tp-pw-card-title{font-size:12px;font-weight:900;letter-spacing:.04em;margin-bottom:10px}
+    .tp-pw-score{display:grid;grid-template-columns:116px 1fr;align-items:center;gap:12px}.tp-pw-ring{--value:0%;width:94px;height:94px;border-radius:50%;background:conic-gradient(#58ca6d var(--value),#26394b 0);display:flex;align-items:center;justify-content:center;position:relative;margin:auto}.tp-pw-ring:after{content:'';position:absolute;width:73px;height:73px;background:#0b1724;border-radius:50%}.tp-pw-ring-text{z-index:2;text-align:center;font-size:25px;font-weight:950;line-height:1}.tp-pw-ring-text small{display:block;font-size:7px;color:#aab7c5;margin-top:5px;letter-spacing:.08em}
+    .tp-pw-check{font-size:12px;color:#d1dae4;margin:6px 0}.tp-pw-ok{color:#58cf70;margin-right:7px}.tp-pw-wait{color:#708398;margin-right:7px}.tp-pw-info{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}.tp-pw-info-row{display:flex;justify-content:space-between;border-bottom:1px solid #1c2d3e;padding-bottom:5px;color:#91a2b4;font-size:11px}.tp-pw-info-row b{color:#eef3f9;text-align:right}.tp-pw-long{color:#57d377!important}.tp-pw-short{color:#ff625f!important}
+    .tp-pw-insight{border:1px solid #3b6b9c;border-radius:6px;background:linear-gradient(90deg,rgba(31,87,143,.24),rgba(12,29,47,.68));padding:12px 15px;margin-top:5px}.tp-pw-insight b{font-size:12px;color:#62b4ff;letter-spacing:.06em}.tp-pw-insight div{font-size:11px;color:#bfccda;margin-top:5px;line-height:1.55}
+    .tp-pw-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:12px 0 14px}.tp-pw-metric{border:1px solid #293c50;border-radius:6px;background:linear-gradient(145deg,#111e2d,#0a1420);padding:11px 12px;height:92px;position:relative;overflow:hidden}.tp-pw-metric label{display:block;font-size:10px;color:#94a4b6;letter-spacing:.05em}.tp-pw-metric strong{display:block;font-size:18px;margin-top:6px}.tp-pw-metric .pending{font-size:14px;color:#8294a8}.tp-pw-spark{position:absolute;left:9px;right:9px;bottom:7px;height:22px}.tp-pw-spark svg{width:100%;height:100%}.tp-pw-green{color:#58d475}.tp-pw-redtext{color:#ff615d}.tp-pw-blue-text{color:#61b3ff}
+    .tp-pw-tabs{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid #293d52;border-radius:5px;background:#091421;margin:0 0 8px}.tp-pw-tab{padding:10px 7px;text-align:center;font-size:11px;color:#aab7c5;border-bottom:2px solid transparent}.tp-pw-tab.active{color:#7dc3ff;border-bottom-color:#56adf5;background:#0d1b2b}
+    .tp-pw-analysis{display:grid;grid-template-columns:.76fr 1.24fr;gap:10px}.tp-pw-panel{border:1px solid #293d52;border-radius:6px;background:rgba(10,21,34,.84);padding:14px}.tp-pw-panel h4{font-size:12px;margin:0 0 11px;color:#f0f5fa}.tp-pw-params{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.tp-pw-field{border:1px solid #26394d;border-radius:5px;padding:8px;background:#0d1927}.tp-pw-field span{display:block;font-size:9px;color:#8193a6}.tp-pw-field b{font-size:13px;color:#dbe4ee}.tp-pw-table{width:100%;border-collapse:collapse;font-size:10px}.tp-pw-table td{padding:5px 6px;border-bottom:1px solid #1e3042}.tp-pw-table td:first-child{color:#9cacbd}.tp-pw-table td:last-child{text-align:right;color:#8799ac}.tp-pw-chart{height:270px;border-left:1px solid #31445a;border-bottom:1px solid #31445a;background:repeating-linear-gradient(to bottom,transparent 0,transparent 41px,rgba(55,77,101,.28) 42px);position:relative}.tp-pw-chart svg{position:absolute;inset:10px;width:calc(100% - 20px);height:calc(100% - 20px)}.tp-pw-chart-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#71869b;font-size:12px;font-weight:800;letter-spacing:.05em}.tp-pw-months{display:grid;grid-template-columns:repeat(12,1fr);height:130px;align-items:end;gap:8px;border-bottom:1px solid #31445a;padding:0 8px}.tp-pw-month{background:#263c52;min-height:5px;border-radius:2px 2px 0 0;position:relative}.tp-pw-month:after{content:attr(data-m);position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);font-size:7px;color:#718398}
+    .tp-pw-bottom{display:grid;grid-template-columns:1fr 1.15fr 1.15fr;gap:0;border:1px solid #293d52;border-radius:6px;background:#0a1522;margin-top:10px}.tp-pw-bottom>div{padding:14px;border-right:1px solid #293d52}.tp-pw-bottom>div:last-child{border-right:0}.tp-pw-bottom h4{font-size:12px;margin:0 0 13px}.tp-pw-donut{width:94px;height:94px;border-radius:50%;background:conic-gradient(#263b50 0 100%);position:relative;margin:5px auto}.tp-pw-donut:after{content:'';position:absolute;inset:18px;background:#0a1522;border-radius:50%}.tp-pw-bar-row{display:grid;grid-template-columns:55px 1fr 42px;align-items:center;gap:8px;font-size:10px;margin:9px 0;color:#aab7c5}.tp-pw-bar{height:10px;background:#17283a;border-radius:2px;overflow:hidden}.tp-pw-bar span{display:block;height:100%;background:#385a75}.tp-pw-empty{text-align:center;color:#71869b;font-size:11px;margin-top:10px}
+    @media(max-width:700px){.tp-pw-grid,.tp-pw-analysis{grid-template-columns:1fr}.tp-pw-metrics{grid-template-columns:repeat(2,1fr)}.tp-pw-tabs{grid-template-columns:repeat(3,1fr)}.tp-pw-bottom{grid-template-columns:1fr}.tp-pw-bottom>div{border-right:0;border-bottom:1px solid #293d52}}
+    @media print {
+      html,body,[data-testid="stAppViewContainer"],[data-testid="stMain"],.stApp{background:#07111d!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+      [data-testid="stHeader"],header{background:#07111d!important}
+      .tp-pw{background:radial-gradient(circle at 72% 3%,rgba(30,91,151,.12),transparent 34%),linear-gradient(145deg,#07111d,#0a1522 58%,#07101a)!important;padding:16px!important;color:#eef4fb!important}
+      .tp-pw-grid{grid-template-columns:1.22fr .98fr!important;gap:20px!important}
+      .tp-pw-metrics{grid-template-columns:repeat(6,1fr)!important;gap:7px!important}
+      .tp-pw-tabs{grid-template-columns:repeat(6,1fr)!important}
+      .tp-pw-analysis{grid-template-columns:.76fr 1.24fr!important;gap:8px!important}
+      .tp-pw-bottom{grid-template-columns:1fr 1.15fr 1.15fr!important}
+      .tp-pw-bottom>div{border-right:1px solid #293d52!important;border-bottom:0!important}
+      .tp-pw-title{font-size:22px!important}.tp-pw-sub{font-size:10px!important}
+      .tp-pw-head{font-size:11px!important}.tp-pw-copy{font-size:10px!important;line-height:1.5!important}
+      .tp-pw-road b{font-size:9px!important}.tp-pw-road span{font-size:8px!important}
+      .tp-pw-card-title{font-size:9px!important}.tp-pw-check{font-size:8px!important}.tp-pw-info-row{font-size:8px!important}
+      .tp-pw-metric{height:70px!important;padding:8px!important}.tp-pw-metric label{font-size:7px!important}.tp-pw-metric strong{font-size:14px!important}
+      .tp-pw-panel{padding:10px!important}.tp-pw-chart{height:220px!important}.tp-pw-months{height:90px!important}
+      .tp-pw-insight{padding:9px 12px!important}.tp-pw-insight b{font-size:9px!important}.tp-pw-insight div{font-size:8px!important}
+      .tp-pw-tab{font-size:8px!important;padding:8px 4px!important}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    score_css = min(max(brief_score or 0, 0), 100)
+    status_class = "" if brief_status == "WATCH" else " preview"
+    st.markdown(f"""
+    <div class="tp-pw">
+      <span class="tp-pw-tag{status_class}">{brief_status}</span>
+      <div class="tp-pw-title">PROFESSOR TRADE BRIEF</div>
+      <div class="tp-pw-sub">A complete decision workspace for the selected research setup. Verified modules populate automatically as they pass audit.</div>
+      <div class="tp-pw-grid">
+        <div>
+          <div class="tp-pw-block"><div class="tp-pw-head"><span class="tp-pw-blue">⌁</span>TRADE THESIS</div><div class="tp-pw-copy">{brief_thesis}</div></div>
+          <div class="tp-pw-block"><div class="tp-pw-head"><span class="tp-pw-blue">◎</span>WHY THIS ENTRY</div><div class="tp-pw-copy">Entry at {brief_entry} is owned by the canonical zone and lifecycle. The system must confirm price behavior before the setup becomes executable.</div></div>
+          <div class="tp-pw-block"><div class="tp-pw-head"><span class="tp-pw-blue">♧</span>TARGETS &amp; TRADE MANAGEMENT ROADMAP</div><div class="tp-pw-roadmap">
+            <div class="tp-pw-road"><b>T1: {brief_t1}</b><span>First deterministic objective</span></div><div class="tp-pw-road"><b>INVALIDATION: {brief_stop}</b><span>Structure fails beyond this level</span></div>
+            <div class="tp-pw-road"><b>T2: {brief_t2}</b><span>Secondary deterministic objective</span></div><div class="tp-pw-road"><b>STOP LOSS: {brief_stop}</b><span>Never widened to rescue a trade</span></div>
+            <div class="tp-pw-road"><b>T3: --</b><span>Module not yet promoted</span></div><div class="tp-pw-road"><b>R:R POTENTIAL: {_brief_value(brief_rr, lambda v:f'{v:.2f}')}</b><span>Pending V5 execution validation</span></div>
+          </div></div>
+        </div>
+        <div>
+          <div class="tp-pw-block"><div class="tp-pw-head"><span class="tp-pw-red">⬡</span>WHY THIS STOP</div><div class="tp-pw-copy">The stop sits beyond deterministic structural invalidation. V5 must verify that its distance survives normal tick noise, spread and one-minute first-touch ordering.</div></div>
+          <div class="tp-pw-card"><div class="tp-pw-card-title">STRUCTURE SCORE (NOT WIN PROBABILITY)</div><div class="tp-pw-score">
+            <div class="tp-pw-ring" style="--value:{score_css}%"><div class="tp-pw-ring-text">{_brief_value(brief_score,lambda v:f'{v/10:.1f}')}<small>STRUCTURE / 10</small></div></div>
+            <div><div class="tp-pw-check"><span class="tp-pw-ok">●</span>Canonical structure</div><div class="tp-pw-check"><span class="tp-pw-ok">●</span>Zone quality {_brief_value(brief_quality,lambda v:f'{v:.0f}')}</div><div class="tp-pw-check"><span class="tp-pw-ok">●</span>Freshness {_brief_value(brief_fresh,lambda v:f'{v:.0f}')}</div><div class="tp-pw-check"><span class="tp-pw-wait">○</span>V5 evidence pending</div><div class="tp-pw-check"><span class="tp-pw-wait">○</span>Execution viability pending</div></div>
+          </div></div>
+          <div class="tp-pw-card"><div class="tp-pw-card-title">KEY INFORMATION</div><div class="tp-pw-info">
+            <div class="tp-pw-info-row"><span>Symbol</span><b>{brief_symbol}</b></div><div class="tp-pw-info-row"><span>Entry Type</span><b>Canonical Zone</b></div>
+            <div class="tp-pw-info-row"><span>Timeframe</span><b>{brief_tf}</b></div><div class="tp-pw-info-row"><span>Market Context</span><b>{brief_zone_type}</b></div>
+            <div class="tp-pw-info-row"><span>Direction</span><b class="{brief_direction_class}">{brief_side}</b></div><div class="tp-pw-info-row"><span>Lifecycle</span><b>{brief_lifecycle}</b></div>
+            <div class="tp-pw-info-row"><span>MTF Alignment</span><b>{brief_mtf}</b></div><div class="tp-pw-info-row"><span>Evidence</span><b>{'LIVE PROMOTED' if data_truth.live_promotion else 'RESEARCH ONLY'}</b></div>
+          </div></div>
+        </div>
+      </div>
+      <div class="tp-pw-insight"><b>★ &nbsp; PROFESSOR INSIGHT</b><div>{brief_action} The Professor explains the plan; it never invents or moves deterministic prices.</div></div>
+      </div>
+    """, unsafe_allow_html=True)
+
+    if brief_candidate:
+        if st.button("INSPECT THIS SETUP", key=f"pw_inspect_{brief_symbol}_{brief_candidate.candidate_id}", width="stretch"):
+            brief_display_tf = {"D":"1D","W":"1W"}.get(brief_candidate.timeframe,brief_candidate.timeframe)
+            st.session_state.active_symbol = brief_symbol
+            if brief_display_tf in CHART_TIMEFRAMES:
+                st.session_state.chart_tf = brief_display_tf
+            st.session_state.focused_candidate_id = brief_candidate.candidate_id
+            st.session_state[f"preferred_candidate_{brief_display_tf}"] = brief_candidate.candidate_id
+            st.rerun()
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
     st.divider()
     render_trade_readiness(market_state)
 
@@ -2854,69 +3047,6 @@ with dashboard_tab:
         st.success("BROKER GATE: ELIGIBLE FOR ORDER ROUTING - account risk/quantity authorization still required.")
         with st.expander("Broker-ready deterministic order packet", expanded=False):
             st.json(broker_order_intent(market_state, selected_candidate), expanded=False)
-
-    # Secondary global diagnostics live at the bottom so the chart and selected trade remain primary.
-    st.divider()
-    render_section("SECONDARY INTELLIGENCE", "Watch List & Elite Diagnostics")
-    st.caption("Research and scan diagnostics are intentionally below the trading workspace. They do not create journal entries or change trading rules.")
-
-    watch_opportunities = elite_diagnostics.get("watch_opportunities", [])
-    with st.expander(f"WATCH LIST ({len(watch_opportunities)})", expanded=False):
-        st.caption(f"Structurally valid {WATCH_MIN_SCORE/10.0:.1f}-{(ELITE_MIN_SCORE-.1)/10.0:.1f}/10 setups. Watch is not Elite and does not create journal entries.")
-        if watch_opportunities:
-            for opportunity in watch_opportunities:
-                c = opportunity.candidate
-                arrow = "&#8593;" if opportunity.direction == "LONG" else "&#8595;"
-                cls = "tp-up" if opportunity.direction == "LONG" else "tp-down"
-                st.markdown(f"**{opportunity.symbol}** <span class='{cls}'>{arrow}</span> {opportunity.direction} &nbsp; | &nbsp; {c.timeframe} {c.zone_type.upper()} &nbsp; | &nbsp; {score10(c.setup_score)} &nbsp; | &nbsp; Composite {opportunity.composite_score/10.0:.1f}/10 &nbsp; | &nbsp; MTF {opportunity.mtf_aligned}/{opportunity.mtf_total} &nbsp; | &nbsp; RR {c.projected_rr:.2f}", unsafe_allow_html=True)
-        else:
-            st.caption("No structurally valid Watch setups right now.")
-
-    with st.expander("WHY THESE ELITE SETUPS?", expanded=False):
-        _g = elite_diagnostics.get("global", {})
-        st.caption("Read-only diagnostics. Elite and Watch share the same composite structural policy; 1m/5m are confirmation-only.")
-        _funnel_cols = st.columns(5)
-        _funnel_cols[0].metric("RAW", int(_g.get("raw", 0)))
-        _funnel_cols[1].metric("8.5+ SCORE", int(_g.get("score_8_5", 0)))
-        _funnel_cols[2].metric("ACTIVE", int(_g.get("active_lifecycle", 0)))
-        _funnel_cols[3].metric("VALID + MTF", int(_g.get("mtf_40", 0)))
-        _funnel_cols[4].metric("ELITE", int(_g.get("elite", 0)))
-
-        _rows = []
-        for _symbol, _report in elite_diagnostics.get("markets", {}).items():
-            _s = _report.get("stages", {})
-            _rows.append({
-                "Market": _symbol, "Raw": int(_s.get("raw", 0)), "8.5+": int(_s.get("score_8_5", 0)),
-                "Active": int(_s.get("active_lifecycle", 0)), "Quality": int(_s.get("zone_quality_75", 0)),
-                "Fresh": int(_s.get("freshness_70", 0)), "Retests": int(_s.get("retests_le_1", 0)),
-                "RR Valid": int(_s.get("rr_valid", 0)), "MTF": int(_s.get("mtf_40", 0)), "Elite": int(_s.get("elite", 0)),
-            })
-        if _rows:
-            st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch")
-
-        _rejections = elite_diagnostics.get("rejections", {})
-        if _rejections:
-            _reason_names = {
-                "score_below_8_5": "Score below 8.5", "confirmation_timeframe_only": "1m/5m confirmation-only",
-                "rr_unavailable": "Projected R:R unavailable", "rr_implausible_above_50": "Projected R:R above sanity ceiling",
-                "inactive_lifecycle": "Not active / approaching", "timeframe_not_elite": "Timeframe excluded",
-                "zone_quality_below_75": "Zone quality below 75", "freshness_below_70": "Freshness below 70",
-                "too_many_retests": "More than 1 retest", "rr_below_2": "Projected R:R below 2.0",
-                "mtf_below_40pct": "MTF agreement below 40%", "same_idea_duplicate": "Collapsed duplicate idea",
-            }
-            _reason_rows = [{"First rejection reason": _reason_names.get(k, k), "Candidates": int(v)} for k, v in sorted(_rejections.items(), key=lambda item: -item[1]) if int(v) > 0]
-            if _reason_rows:
-                st.dataframe(pd.DataFrame(_reason_rows), hide_index=True, width="stretch")
-        if elite_diagnostics.get("errors"):
-            st.warning("Some markets could not be diagnosed: " + ", ".join(elite_diagnostics["errors"].keys()))
-
-    with st.expander("ADVANCED / SYSTEM DETAILS", expanded=False):
-        st.caption("Low-frequency technical detail stays available without competing with the trading workflow.")
-        st.write(f"Canonical candidates loaded: {len(canonical_candidates)}")
-        st.write(f"Active symbol: {active_symbol} | Chart timeframe: {selected_tf}")
-        st.write(f"Elite threshold: {ELITE_MIN_SCORE/10.0:.1f}/10 | Watch threshold: {WATCH_MIN_SCORE/10.0:.1f}/10")
-        st.write("MarketState remains the single source of truth. Professor explanations do not alter execution rules.")
-
 
 # ---------------------------------------------------------------------
 # JOURNAL TAB
@@ -3057,6 +3187,9 @@ with journal_tab:
 # ---------------------------------------------------------------------
 
 with backtest_tab:
+    # BACKTEST WORKSPACE ORDER - V3.3: CONTROLS / VISUAL BRIEF / DETAILS
+    # RESTORED MANUAL BACKTEST LAB - V3.2
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
     # V3.2C - high-fidelity Backtest Lab research terminal.
     # Visual-only rebuild: canonical V3.2A replay/evidence backend is preserved.
     st.markdown(r"""
@@ -3099,7 +3232,7 @@ with backtest_tab:
     """, unsafe_allow_html=True)
 
     try:
-        ev = evidence_stats()
+        ev = get_evidence_stats()
     except Exception:
         ev = {"runs": 0, "observations": 0, "resolved": 0}
 
@@ -3114,7 +3247,7 @@ with backtest_tab:
     with wh4:
         st.markdown(f'<div class="bt-card"><div class="bt-card-label">EVIDENCE WAREHOUSE &nbsp; <span class="bt-active">Active</span></div><div class="bt-muted" style="margin-top:9px">Unique setups: <b style="color:#f4f6f8">{ev["observations"]:,}</b><br>De-duplicated research evidence</div></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="bt-panel"><div class="bt-step">1. DESIGN YOUR EXPERIMENT</div><div class="bt-copy">Configure your backtest with the same grading and rules used in live Trading Pulse.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="bt-panel"><div class="bt-step">1. DESIGN YOUR EXPERIMENT</div><div class="bt-copy">Configure a legacy V3 backtest experiment. V4 evidence-qualified grading is validated separately and is never inferred from raw score alone.</div></div>', unsafe_allow_html=True)
 
     symbols = get_enabled_symbols()
     c1, c2, c3, c4, c5 = st.columns([1.25, 1.0, 1.35, 1.18, 1.15])
@@ -3153,17 +3286,139 @@ with backtest_tab:
 
     run_col, save_col = st.columns([5.0, 1.05])
     with run_col:
-        run_clicked = st.button("RUN BACKTEST", type="primary", width="stretch", key="run_backtest_lab")
+        run_clicked = st.button(
+            "RUN BACKTEST - CANONICAL ADAPTER REQUIRED",
+            type="primary",
+            width="stretch",
+            key="run_backtest_lab",
+            disabled=not allow_manual_backtest(),
+            help="The previous button ran the legacy V3/Yahoo replay. It is blocked until the V5/V7 point-in-time database adapter is installed.",
+        )
     with save_col:
         st.button("SAVE AS EXPERIMENT", width="stretch", disabled=True, help="Experiment presets are coming next.")
     st.markdown(f'<div class="bt-footnote">Hypothesis: <b>{bt_symbol}</b> &nbsp;|&nbsp; <b>{bt_scope}</b> &nbsp;|&nbsp; <b>{bt_score:.1f}+</b> &nbsp;|&nbsp; <b>{bt_days}d</b> &nbsp;|&nbsp; <b>{bt_direction.title()}</b></div>', unsafe_allow_html=True)
 
-    if run_clicked:
-        with st.spinner("Replaying canonical Trading Pulse logic point-in-time. First-time observations can take several minutes; completed evidence is reusable afterward."):
-            try:
-                st.session_state["bt_last_result"] = run_lab_backtest(bt_symbol, bt_scope, bt_score, bt_direction, bt_days)
-            except Exception as exc:
-                st.error(f"Backtest Lab error: {exc}")
+    st.info(
+        "Manual controls are preserved, but execution is temporarily blocked because the old button used the V3/Yahoo replay. "
+        "The newest V5/V7 research remains read-only until a query-compatible canonical adapter is validated."
+    )
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    # Full-width Professor intelligence workspace. Widgets remain visible even
+    # before their verified V5 backends are promoted; unavailable values stay blank.
+    st.write("")
+    watch_opportunities = elite_diagnostics.get("watch_opportunities", [])
+    brief_opportunity = watch_opportunities[0] if watch_opportunities else None
+    brief_candidate = focused_candidate
+    brief_state = brief_opportunity.market_state if brief_opportunity else market_state
+    brief_symbol = brief_opportunity.symbol if brief_opportunity else active_symbol
+    brief_side = brief_opportunity.direction if brief_opportunity else (
+        "LONG" if brief_candidate and str(brief_candidate.zone_type).lower() == "demand" else "SHORT"
+    )
+    brief_status = "WATCH" if brief_opportunity else "RESEARCH PREVIEW"
+    try:
+        brief_plan = planned_trade_metrics(brief_candidate, brief_state) if brief_candidate else {}
+    except Exception:
+        brief_plan = {}
+
+    def _brief_value(value, formatter=None):
+        if value is None:
+            return "--"
+        return formatter(value) if formatter else str(value)
+
+    brief_score = safe_float(getattr(brief_candidate, "setup_score", None)) if brief_candidate else None
+    brief_quality = safe_float(getattr(brief_candidate, "zone_quality_score", None)) if brief_candidate else None
+    brief_fresh = safe_float(getattr(brief_candidate, "freshness_score", None)) if brief_candidate else None
+    brief_rr = safe_float(getattr(brief_candidate, "projected_rr", None)) if brief_candidate else None
+    brief_tf = str(getattr(brief_candidate, "timeframe", "--")) if brief_candidate else "--"
+    brief_zone_type = str(getattr(brief_candidate, "zone_type", "--")).upper() if brief_candidate else "--"
+    brief_lifecycle = str(getattr(brief_candidate, "lifecycle", "WAITING")).replace("_", " ") if brief_candidate else "WAITING"
+    brief_mtf = (
+        f"{brief_opportunity.mtf_aligned}/{brief_opportunity.mtf_total}"
+        if brief_opportunity and brief_opportunity.mtf_total else "--"
+    )
+    brief_direction_class = "tp-pw-long" if brief_side == "LONG" else "tp-pw-short"
+    brief_entry = money(brief_plan.get("entry"))
+    brief_stop = money(brief_plan.get("stop"))
+    brief_t1 = money(brief_plan.get("t1"))
+    brief_t2 = money(brief_plan.get("t2"))
+    brief_thesis = (
+        f"A {brief_side} research setup based on a {brief_tf} {brief_zone_type} zone. "
+        "The deterministic engine owns every price level; this workspace explains the decision without changing it."
+        if brief_candidate else
+        "Waiting for the canonical engine to produce a setup worth explaining. No trade is manufactured to fill the screen."
+    )
+    brief_action = {
+        "APPROACHING": "Let price come to the zone. Do not chase. Wait for confirmation and execution viability.",
+        "IN ZONE": "Price is testing structure. A touch alone is not permission to enter.",
+        "QUALIFIED": "Structure is provisionally qualified. Verified V5 evidence must still authorize the grade.",
+    }.get(brief_lifecycle, "Observe the market and wait for every deterministic gate to become explicit.")
+
+    st.markdown("""
+    <style>
+    .tp-pw{border:0;border-radius:0;background:radial-gradient(circle at 72% 3%,rgba(30,91,151,.12),transparent 34%),linear-gradient(145deg,#07111d,#0a1522 58%,#07101a);padding:22px 22px 26px;color:#eef4fb;box-shadow:none}
+    .tp-pw-tag{display:inline-block;background:#28683d;border:1px solid #3d9859;color:#b7f4c2;border-radius:3px;padding:3px 8px;font-size:9px;font-weight:900;letter-spacing:.08em}.tp-pw-tag.preview{background:#183955;border-color:#2e6691;color:#91caf7}
+    .tp-pw-title{font-size:24px;font-weight:950;margin:7px 0 2px}.tp-pw-sub{font-size:12px;color:#91a4b8;max-width:760px;line-height:1.5}
+    .tp-pw-grid{display:grid;grid-template-columns:1.22fr .98fr;gap:24px;margin-top:20px}.tp-pw-block{margin-bottom:20px}.tp-pw-head{font-size:14px;font-weight:900;letter-spacing:.025em;margin-bottom:8px}.tp-pw-blue{color:#58b5ff;margin-right:8px}.tp-pw-red{color:#ff5c58;margin-right:8px}.tp-pw-copy{font-size:13px;line-height:1.68;color:#c1ccd8;padding-left:23px}
+    .tp-pw-roadmap{display:grid;grid-template-columns:1fr 1fr;gap:9px 22px;padding-left:22px}.tp-pw-road{border-left:1px solid #34516c;padding:3px 0 6px 14px;min-height:48px}.tp-pw-road b{display:block;font-size:12px;color:#f6f9fd}.tp-pw-road span{font-size:11px;color:#8fa0b2}
+    .tp-pw-card{border:1px solid #2b4056;border-radius:6px;background:rgba(13,26,41,.76);padding:13px;margin-bottom:12px}.tp-pw-card-title{font-size:12px;font-weight:900;letter-spacing:.04em;margin-bottom:10px}
+    .tp-pw-score{display:grid;grid-template-columns:116px 1fr;align-items:center;gap:12px}.tp-pw-ring{--value:0%;width:94px;height:94px;border-radius:50%;background:conic-gradient(#58ca6d var(--value),#26394b 0);display:flex;align-items:center;justify-content:center;position:relative;margin:auto}.tp-pw-ring:after{content:'';position:absolute;width:73px;height:73px;background:#0b1724;border-radius:50%}.tp-pw-ring-text{z-index:2;text-align:center;font-size:25px;font-weight:950;line-height:1}.tp-pw-ring-text small{display:block;font-size:7px;color:#aab7c5;margin-top:5px;letter-spacing:.08em}
+    .tp-pw-check{font-size:12px;color:#d1dae4;margin:6px 0}.tp-pw-ok{color:#58cf70;margin-right:7px}.tp-pw-wait{color:#708398;margin-right:7px}.tp-pw-info{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}.tp-pw-info-row{display:flex;justify-content:space-between;border-bottom:1px solid #1c2d3e;padding-bottom:5px;color:#91a2b4;font-size:11px}.tp-pw-info-row b{color:#eef3f9;text-align:right}.tp-pw-long{color:#57d377!important}.tp-pw-short{color:#ff625f!important}
+    .tp-pw-insight{border:1px solid #3b6b9c;border-radius:6px;background:linear-gradient(90deg,rgba(31,87,143,.24),rgba(12,29,47,.68));padding:12px 15px;margin-top:5px}.tp-pw-insight b{font-size:12px;color:#62b4ff;letter-spacing:.06em}.tp-pw-insight div{font-size:11px;color:#bfccda;margin-top:5px;line-height:1.55}
+    .tp-pw-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:12px 0 14px}.tp-pw-metric{border:1px solid #293c50;border-radius:6px;background:linear-gradient(145deg,#111e2d,#0a1420);padding:11px 12px;height:92px;position:relative;overflow:hidden}.tp-pw-metric label{display:block;font-size:10px;color:#94a4b6;letter-spacing:.05em}.tp-pw-metric strong{display:block;font-size:18px;margin-top:6px}.tp-pw-metric .pending{font-size:14px;color:#8294a8}.tp-pw-spark{position:absolute;left:9px;right:9px;bottom:7px;height:22px}.tp-pw-spark svg{width:100%;height:100%}.tp-pw-green{color:#58d475}.tp-pw-redtext{color:#ff615d}.tp-pw-blue-text{color:#61b3ff}
+    .tp-pw-tabs{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid #293d52;border-radius:5px;background:#091421;margin:0 0 8px}.tp-pw-tab{padding:10px 7px;text-align:center;font-size:11px;color:#aab7c5;border-bottom:2px solid transparent}.tp-pw-tab.active{color:#7dc3ff;border-bottom-color:#56adf5;background:#0d1b2b}
+    .tp-pw-analysis{display:grid;grid-template-columns:.76fr 1.24fr;gap:10px}.tp-pw-panel{border:1px solid #293d52;border-radius:6px;background:rgba(10,21,34,.84);padding:14px}.tp-pw-panel h4{font-size:12px;margin:0 0 11px;color:#f0f5fa}.tp-pw-params{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.tp-pw-field{border:1px solid #26394d;border-radius:5px;padding:8px;background:#0d1927}.tp-pw-field span{display:block;font-size:9px;color:#8193a6}.tp-pw-field b{font-size:13px;color:#dbe4ee}.tp-pw-table{width:100%;border-collapse:collapse;font-size:10px}.tp-pw-table td{padding:5px 6px;border-bottom:1px solid #1e3042}.tp-pw-table td:first-child{color:#9cacbd}.tp-pw-table td:last-child{text-align:right;color:#8799ac}.tp-pw-chart{height:270px;border-left:1px solid #31445a;border-bottom:1px solid #31445a;background:repeating-linear-gradient(to bottom,transparent 0,transparent 41px,rgba(55,77,101,.28) 42px);position:relative}.tp-pw-chart svg{position:absolute;inset:10px;width:calc(100% - 20px);height:calc(100% - 20px)}.tp-pw-chart-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#71869b;font-size:12px;font-weight:800;letter-spacing:.05em}.tp-pw-months{display:grid;grid-template-columns:repeat(12,1fr);height:130px;align-items:end;gap:8px;border-bottom:1px solid #31445a;padding:0 8px}.tp-pw-month{background:#263c52;min-height:5px;border-radius:2px 2px 0 0;position:relative}.tp-pw-month:after{content:attr(data-m);position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);font-size:7px;color:#718398}
+    .tp-pw-bottom{display:grid;grid-template-columns:1fr 1.15fr 1.15fr;gap:0;border:1px solid #293d52;border-radius:6px;background:#0a1522;margin-top:10px}.tp-pw-bottom>div{padding:14px;border-right:1px solid #293d52}.tp-pw-bottom>div:last-child{border-right:0}.tp-pw-bottom h4{font-size:12px;margin:0 0 13px}.tp-pw-donut{width:94px;height:94px;border-radius:50%;background:conic-gradient(#263b50 0 100%);position:relative;margin:5px auto}.tp-pw-donut:after{content:'';position:absolute;inset:18px;background:#0a1522;border-radius:50%}.tp-pw-bar-row{display:grid;grid-template-columns:55px 1fr 42px;align-items:center;gap:8px;font-size:10px;margin:9px 0;color:#aab7c5}.tp-pw-bar{height:10px;background:#17283a;border-radius:2px;overflow:hidden}.tp-pw-bar span{display:block;height:100%;background:#385a75}.tp-pw-empty{text-align:center;color:#71869b;font-size:11px;margin-top:10px}
+    @media(max-width:700px){.tp-pw-grid,.tp-pw-analysis{grid-template-columns:1fr}.tp-pw-metrics{grid-template-columns:repeat(2,1fr)}.tp-pw-tabs{grid-template-columns:repeat(3,1fr)}.tp-pw-bottom{grid-template-columns:1fr}.tp-pw-bottom>div{border-right:0;border-bottom:1px solid #293d52}}
+    @media print {
+      html,body,[data-testid="stAppViewContainer"],[data-testid="stMain"],.stApp{background:#07111d!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+      [data-testid="stHeader"],header{background:#07111d!important}
+      .tp-pw{background:radial-gradient(circle at 72% 3%,rgba(30,91,151,.12),transparent 34%),linear-gradient(145deg,#07111d,#0a1522 58%,#07101a)!important;padding:16px!important;color:#eef4fb!important}
+      .tp-pw-grid{grid-template-columns:1.22fr .98fr!important;gap:20px!important}
+      .tp-pw-metrics{grid-template-columns:repeat(6,1fr)!important;gap:7px!important}
+      .tp-pw-tabs{grid-template-columns:repeat(6,1fr)!important}
+      .tp-pw-analysis{grid-template-columns:.76fr 1.24fr!important;gap:8px!important}
+      .tp-pw-bottom{grid-template-columns:1fr 1.15fr 1.15fr!important}
+      .tp-pw-bottom>div{border-right:1px solid #293d52!important;border-bottom:0!important}
+      .tp-pw-title{font-size:22px!important}.tp-pw-sub{font-size:10px!important}
+      .tp-pw-head{font-size:11px!important}.tp-pw-copy{font-size:10px!important;line-height:1.5!important}
+      .tp-pw-road b{font-size:9px!important}.tp-pw-road span{font-size:8px!important}
+      .tp-pw-card-title{font-size:9px!important}.tp-pw-check{font-size:8px!important}.tp-pw-info-row{font-size:8px!important}
+      .tp-pw-metric{height:70px!important;padding:8px!important}.tp-pw-metric label{font-size:7px!important}.tp-pw-metric strong{font-size:14px!important}
+      .tp-pw-panel{padding:10px!important}.tp-pw-chart{height:220px!important}.tp-pw-months{height:90px!important}
+      .tp-pw-insight{padding:9px 12px!important}.tp-pw-insight b{font-size:9px!important}.tp-pw-insight div{font-size:8px!important}
+      .tp-pw-tab{font-size:8px!important;padding:8px 4px!important}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    score_css = min(max(brief_score or 0, 0), 100)
+    status_class = "" if brief_status == "WATCH" else " preview"
+    st.markdown("<div style='font-size:18px;font-weight:900;color:#f4f7fb;margin:8px 0 10px'>BACKTEST INTELLIGENCE</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="tp-pw">
+      <div class="tp-pw-metrics">
+        <div class="tp-pw-metric"><label>WIN RATE</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+        <div class="tp-pw-metric"><label>PROFIT FACTOR</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+        <div class="tp-pw-metric"><label>EXPECTANCY</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+        <div class="tp-pw-metric"><label>MAX DRAWDOWN</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+        <div class="tp-pw-metric"><label>TOTAL TRADES</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+        <div class="tp-pw-metric"><label>RETURN</label><strong class="pending">AWAITING V5</strong><div class="tp-pw-spark"><svg viewBox="0 0 100 20"><path d="M0 14 L100 14" stroke="#344b61" stroke-dasharray="4 4" fill="none"/></svg></div></div>
+      </div>
+      <div class="tp-pw-tabs"><div class="tp-pw-tab active">BACKTEST RESULTS</div><div class="tp-pw-tab">TRADE HISTORY</div><div class="tp-pw-tab">PERFORMANCE</div><div class="tp-pw-tab">RISK ANALYSIS</div><div class="tp-pw-tab">HEATMAP</div><div class="tp-pw-tab">MONTHLY REPORT</div></div>
+      <div class="tp-pw-analysis">
+        <div>
+          <div class="tp-pw-panel"><h4>BACKTEST PARAMETERS</h4><div class="tp-pw-params"><div class="tp-pw-field"><span>START DATE</span><b>--</b></div><div class="tp-pw-field"><span>END DATE</span><b>--</b></div><div class="tp-pw-field"><span>TIMEFRAME</span><b>{brief_tf}</b></div><div class="tp-pw-field"><span>CONTRACT</span><b>{brief_symbol}</b></div><div class="tp-pw-field"><span>SL (RISK)</span><b>1R</b></div><div class="tp-pw-field"><span>TARGETS</span><b>3R / 5R</b></div></div></div>
+          <div class="tp-pw-panel" style="margin-top:10px"><h4>RESULTS SUMMARY</h4><table class="tp-pw-table"><tr><td>Total Net Profit</td><td>--</td></tr><tr><td>Gross Profit</td><td>--</td></tr><tr><td>Gross Loss</td><td>--</td></tr><tr><td>Profit Factor</td><td>--</td></tr><tr><td>Win Rate</td><td>--</td></tr><tr><td>Total Trades</td><td>--</td></tr><tr><td>Average Win</td><td>--</td></tr><tr><td>Average Loss</td><td>--</td></tr><tr><td>Expectancy</td><td>--</td></tr><tr><td>Max Drawdown</td><td>--</td></tr><tr><td>Wilson Lower Bound</td><td>--</td></tr></table><div class="tp-pw-empty">Verified results populate after V5 calibration.</div></div>
+        </div>
+        <div class="tp-pw-panel"><h4>EQUITY CURVE</h4><div class="tp-pw-chart"><svg viewBox="0 0 600 180" preserveAspectRatio="none"><path d="M0 155 C100 130,150 145,230 105 S380 100,460 55 S540 65,600 25" fill="none" stroke="#31506b" stroke-width="2" stroke-dasharray="6 7"/></svg><div class="tp-pw-chart-note">AWAITING VERIFIED V5 EQUITY SERIES</div></div><h4 style="margin-top:18px">MONTHLY PERFORMANCE (%)</h4><div class="tp-pw-months">{''.join(f'<div class="tp-pw-month" data-m="{m}"></div>' for m in ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])}</div></div>
+      </div>
+      <div class="tp-pw-bottom">
+        <div><h4>TRADE DISTRIBUTION</h4><div class="tp-pw-donut"></div><div class="tp-pw-empty">Winners / losers awaiting V5</div></div>
+        <div><h4>RISK / REWARD DISTRIBUTION</h4><div class="tp-pw-bar-row"><span>3R+</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>2R to 3R</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>1R to 2R</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>0R to 1R</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div></div>
+        <div><h4>SETUP QUALITY BREAKDOWN</h4><div class="tp-pw-bar-row"><span>A+ Setups</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>A Setups</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>B Setups</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div><div class="tp-pw-bar-row"><span>C Setups</span><div class="tp-pw-bar"><span style="width:0%"></span></div><b>--</b></div></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     result = st.session_state.get("bt_last_result")
     st.markdown('<div class="bt-result-head">2. RESULTS OVERVIEW</div>', unsafe_allow_html=True)
@@ -3219,7 +3474,7 @@ with backtest_tab:
     with low1:
         st.markdown('<div class="bt-chart-title">RECENT EXPERIMENTS</div>', unsafe_allow_html=True)
         try:
-            recent=recent_experiments(5)
+            recent=get_recent_experiments(5)
             if recent:
                 rows=[]
                 for x in recent:
@@ -3254,7 +3509,6 @@ with backtest_tab:
 **No future candles.** Every evaluation is reconstructed point-in-time.  
 **One setup = one observation.** Repeated discovery links to the same canonical evidence instead of inflating sample size.  
 **Evidence, not self-modification.** Research is stored for later Professor analysis; it never silently rewrites Trading Pulse rules.""")
-
 
 # ---------------------------------------------------------------------
 # SYSTEM DIAGNOSTICS
@@ -3424,7 +3678,7 @@ with professor_tab:
     with analytics_tab:
         st.markdown("### PROFESSOR RESEARCH & LEARNING ANALYTICS")
         st.caption("Questions are telemetry. Research claims stay quarantined until reviewed; they do not silently become truth.")
-        m = get_professor_metrics()
+        m = get_professor_metrics_cached()
         a1,a2,a3,a4,a5 = st.columns(5)
         a1.metric("QUESTIONS", m.get("questions",0))
         a2.metric("WEB RESEARCH", m.get("researched",0))
@@ -3467,4 +3721,3 @@ with professor_tab:
         "EDUCATION / PAPER PRACTICE: The Professor explains the system and futures concepts. "
         "It does not guarantee outcomes and does not place trades."
     )
-

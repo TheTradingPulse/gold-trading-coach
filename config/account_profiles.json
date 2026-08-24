@@ -1,0 +1,39 @@
+{
+  "schema": "TP_ACCOUNT_PROFILES_1",
+  "default": "apex_50k_eod_pa_level1",
+  "profiles": {
+    "apex_50k_eod_evaluation": {
+      "nominal_balance": 50000,
+      "liquidation_threshold": 48000,
+      "daily_loss_remaining": 1000,
+      "max_standard_equivalents": 6
+    },
+    "apex_50k_intraday_evaluation": {
+      "nominal_balance": 50000,
+      "liquidation_threshold": 48000,
+      "daily_loss_remaining": null,
+      "max_standard_equivalents": 6
+    },
+    "apex_50k_eod_pa_level1": {
+      "nominal_balance": 50000,
+      "liquidation_threshold": 48000,
+      "daily_loss_remaining": 1000,
+      "max_standard_equivalents": 2
+    },
+    "apex_50k_intraday_pa_level1": {
+      "nominal_balance": 50000,
+      "liquidation_threshold": 48000,
+      "daily_loss_remaining": 1000,
+      "max_standard_equivalents": 2
+    }
+  },
+  "defaults": {
+    "risk_basis": "nominal",
+    "risk_percent": 2.0,
+    "daily_risk_cap_percent": 100.0,
+    "max_execution_cost_percent": 10.0,
+    "preference": "automatic",
+    "slippage_ticks_each_side": 1.0
+  },
+  "warning": "Sizing defaults to 1%, 2%, or 3% of the advertised $50,000 balance. Apex drawdown and DLL are separate compliance warnings and may make the requested risk unsafe or unavailable."
+}

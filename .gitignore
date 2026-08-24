@@ -1,105 +1,69 @@
-# ==============================
-# The Trading Pulse
-# Git Ignore
-# ==============================
+# Trading Pulse release-safe ignore policy
 
-# Python virtual environments
-venv/
-.venv/
-env/
-
-# Python cache
-__pycache__/
-*.py[cod]
-*.class
-
-# Environment variables / secrets
+# Credentials and local environment
 .env
 .env.*
 !.env.example
-
-# API keys / credentials
-*.key
 *.pem
-credentials.json
-secrets.json
+*.key
+*.p12
+*.pfx
 
-# Local databases
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Research warehouses, purchased market data, and generated evidence
+research_data/
+knowledge/*.db
+knowledge/*.db-*
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
+*.parquet
+*.feather
+*.arrow
+*.dbn
+*.csv.gz
 
-# Temporary files
-temp/
-tmp/
-temp_chart.png
-*.tmp
-*.log
-
-# Local data exports
-*.csv
-
-# Screenshots / generated images
-screenshots/
-
-# Project backups / archives
-*.zip
-*.rar
-*.7z
-*.tar
-*.gz
-
-# IDE / editor files
-.vscode/
-.idea/
-
-# Windows
-Thumbs.db
-Desktop.ini
-
-# macOS
-.DS_Store
-
-# Testing / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
-# Local PostgreSQL development database
-postgres-data/
-
-# ==========================================
-# Trading Pulse local development artifacts
-# ==========================================
-
-backup_v2_*/
+# Backups, installer archives, and generated result packages
 backups/
+backup/
+archive/
+archives/
+*.zip
+*.download
+*.tar
+*.tar.gz
+*.7z
 
-TEST_V2_*.py
+# Generated reports and runtime output
+logs/
+*.log
+tmp/
+temp/
+output/
+outputs/
+results/
+prepublish_gate_report.json
 
-V2_*SOURCE*
-V2_*CHATGPT*
-*snapshot*
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
 
-CURRENT_DASHBOARD_FOR_FIX.py
-dashboard_before_*.py
-dashboard_v2_*_backup.py
-# V3/V3.4 local development harnesses
-TEST_V3_*.py
-INSTALL_TRADING_PULSE_*.ps1
-RUN_V3_*.ps1
-TRADING_PULSE_V*.py
-V3_STARTING_SOURCE.txt
-
-# Local research/evidence cache (never production source of truth)
-research_data/
-
-# Local audit/export bundles
-*_PROJECT_MANIFEST.txt
-*_PYTHON_COMPILE_AUDIT.txt
-TradingPulse_*.zip
+# JavaScript tooling if introduced later
+node_modules/
+dist/
+build/

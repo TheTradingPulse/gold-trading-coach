@@ -1,0 +1,51 @@
+{
+  "schema": "TP_CANONICAL_SYSTEM_REGISTRY_1",
+  "status": "CANONICAL_V6_LIVE_SHADOW_OPERATIONAL",
+  "production": {
+    "entrypoint": "dashboard.py",
+    "market_state": "core/market_state_builder.py",
+    "structure_detector": "core/setup_candidate_engine.py",
+    "trade_plan": "core/trade_plan_engine.py",
+    "execution_lifecycle": "core/execution_lifecycle_engine.py",
+    "elite_adapter": "core/live_grading_service.py",
+    "elite_state": "FAIL_CLOSED_UNTIL_CANONICAL_EVIDENCE_ADAPTER",
+    "shadow_structure_detector": "core/canonical_professional_zone_detector.py",
+    "shadow_parity": "PROVEN",
+    "live_shadow_last_run": {
+      "successful_symbols": 8,
+      "total_symbols": 8,
+      "ids_stable": true
+    },
+    "shadow_lifecycle": "core/canonical_opportunity_lifecycle.py",
+    "shadow_lifecycle_status": "CANONICAL_LIFECYCLE_SHADOW_OPERATIONAL",
+    "live_promotion": false
+  },
+  "research": {
+    "canonical_raw_history": "research_data/v4/historical_blind/raw",
+    "canonical_multitimeframe_warehouse": "research_data/v5/databento_v5_warehouse.db",
+    "corrected_point_in_time_replay": "research_data/v5/replay_point_in_time",
+    "professional_zone_reference": "research_data/v6/professional_zone_reference.db",
+    "latest_audit_root": "research_data/v6",
+    "rr_targets": {
+      "minimum": 1,
+      "maximum": 20
+    }
+  },
+  "contracts": {
+    "structure_score_is_probability": false,
+    "raw_score_can_create_elite": false,
+    "same_bar_ambiguity_is_win": false,
+    "future_session_direction_allowed": false,
+    "unverified_evidence_can_reach_live": false,
+    "research_can_self_promote": false,
+    "canonical_setup": "core/canonical_contracts.py:CanonicalSetup",
+    "canonical_outcome": "core/canonical_contracts.py:CanonicalOutcome",
+    "evidence_decision": "core/canonical_contracts.py:EvidenceDecision"
+  },
+  "legacy": {
+    "v3_backtest_backend": "ACTIVE_UI_LEGACY_REPLACE_IN_PHASE_3",
+    "v4_research": "REFERENCE_AND_INTEGRITY_CONTRACTS",
+    "v5_research": "CANONICAL_WAREHOUSE_AND_CORRECTED_REPLAY",
+    "v6_research": "CANONICAL_PROFESSIONAL_ZONE_CANDIDATE"
+  }
+}

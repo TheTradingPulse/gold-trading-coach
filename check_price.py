@@ -1,10 +1,11 @@
 import os
-
-os.environ["DATABASE_URL"] = "postgresql://postgres:iAwDrcIkfdLpbjScbZlhaqNEcbcbPWIF@hayabusa.proxy.rlwy.net:57737/railway"
-
 import psycopg2
 
-conn = psycopg2.connect(os.environ["DATABASE_URL"])
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required. Credentials must never be embedded in source code.")
+
+conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
 
 for tf in ["1m", "5m", "15m", "1H", "4H", "D"]:
