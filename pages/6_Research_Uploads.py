@@ -7,6 +7,7 @@ are evidence candidates only; they never modify trading rules automatically.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -196,6 +197,62 @@ def save_submission(payload: dict, file_data: bytes | None) -> None:
             )
 
 
+def load_recent_link_submissions(limit: int = 25) -> list[dict]:
+    """Return recent link submissions without exposing submitter contact data."""
+    mode = init_store()
+    if mode == "postgres":
+        with postgres_connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text, created_at, indicator_name, creator_name,
+                       market, timeframe, notes, links, status
+                FROM research_submissions
+                WHERE links IS NOT NULL AND links <> '[]'::jsonb
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+    else:
+        path = Path(os.getenv("TP_RESEARCH_SQLITE", "/tmp/tradingpulse_research.db"))
+        with sqlite3.connect(path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, created_at, indicator_name, creator_name,
+                       market, timeframe, notes, links, status
+                FROM research_submissions
+                WHERE links IS NOT NULL AND links <> '[]'
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+    results = []
+    for row in rows:
+        raw_links = row[7]
+        if isinstance(raw_links, str):
+            try:
+                raw_links = json.loads(raw_links)
+            except json.JSONDecodeError:
+                raw_links = []
+        results.append(
+            {
+                "id": row[0],
+                "created_at": row[1],
+                "indicator_name": row[2],
+                "creator_name": row[3],
+                "market": row[4],
+                "timeframe": row[5],
+                "notes": row[6],
+                "links": raw_links or [],
+                "status": row[8],
+            }
+        )
+    return results
+
+
 st.markdown('<div class="tp-topline"></div>', unsafe_allow_html=True)
 st.markdown('<div class="tp-eyebrow">THE TRADING PULSE / RESEARCH INTAKE</div>', unsafe_allow_html=True)
 st.markdown('<div class="tp-title">Share a Strategy or Indicator</div>', unsafe_allow_html=True)
@@ -303,6 +360,57 @@ if submitted:
             st.success("Submission received for review.")
             st.code(submission_id, language=None)
             st.caption("Save this private submission ID. Submitted material cannot change live trading rules automatically.")
+
+st.divider()
+st.markdown('<div class="tp-eyebrow">OWNER ACCESS</div>', unsafe_allow_html=True)
+st.subheader("PRIVATE REVIEW QUEUE")
+st.caption("Submitted links stay hidden until the Railway owner password is entered.")
+
+configured_admin_key = os.getenv("TP_RESEARCH_ADMIN_KEY", "")
+entered_admin_key = st.text_input("Owner password", type="password", key="research_owner_password")
+owner_authenticated = bool(
+    configured_admin_key
+    and entered_admin_key
+    and hmac.compare_digest(entered_admin_key, configured_admin_key)
+)
+
+if not configured_admin_key:
+    st.info("Owner review is not configured yet. Add TP_RESEARCH_ADMIN_KEY in Railway Variables.")
+elif entered_admin_key and not owner_authenticated:
+    st.error("Incorrect owner password.")
+elif owner_authenticated:
+    try:
+        recent_submissions = load_recent_link_submissions()
+    except Exception:
+        recent_submissions = []
+        st.warning("Submitted links are temporarily unavailable while the research store reconnects.")
+
+    if not recent_submissions:
+        st.info("No submitted links are available yet.")
+    else:
+        st.success(f"Owner access verified. Showing {len(recent_submissions)} recent submission(s).")
+        for item in recent_submissions:
+            created = item["created_at"]
+            if hasattr(created, "strftime"):
+                created_label = created.strftime("%Y-%m-%d %H:%M UTC")
+            else:
+                created_label = str(created).replace("T", " ")[:16] + " UTC"
+            title = item["indicator_name"] or "Untitled indicator or strategy"
+            status = (item["status"] or "PENDING_REVIEW").replace("_", " ").title()
+            with st.expander(f"{title}  |  {created_label}  |  {status}", expanded=False):
+                details = [value for value in [item["market"], item["timeframe"]] if value]
+                if details:
+                    st.caption(" · ".join(details))
+                if item["creator_name"]:
+                    st.write(f"Creator: {item['creator_name']}")
+                if item["notes"]:
+                    st.write(item["notes"])
+                for number, link in enumerate(item["links"], start=1):
+                    url = link.get("url") if isinstance(link, dict) else str(link)
+                    provider = link.get("provider", "Open link") if isinstance(link, dict) else "Open link"
+                    if url:
+                        st.link_button(f"OPEN {provider.upper()} LINK {number}", url, use_container_width=True)
+                st.caption(f"Submission ID: {item['id']}")
 
 st.divider()
 st.markdown(
