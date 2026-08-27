@@ -1323,6 +1323,7 @@ def build_candlestick_chart(
     show_grade_a=True,
     show_grade_b=True,
     show_grade_c=False,
+    show_grade_d=True,
     focused_candidate_id=None,
     candidates=None,
 ):
@@ -1377,7 +1378,7 @@ def build_candlestick_chart(
         "A": show_grade_a,
         "B": show_grade_b,
         "C": show_grade_c,
-        "D": False,
+        "D": show_grade_d,
     }
 
     def allowed_market_state(zone):
@@ -2241,16 +2242,26 @@ COACH_NAME = f"{active_instrument.name.upper()} COACH"
 if "chart_tf" not in st.session_state:
     st.session_state.chart_tf = DEFAULT_CHART_TF
 
+VISIBILITY_SCHEMA = 2
+if st.session_state.get("visibility_schema") != VISIBILITY_SCHEMA:
+    st.session_state.zone_quality = "ALL"
+    for _visibility_key in (
+        "zone_grade_aplus", "zone_grade_a", "zone_grade_b", "zone_grade_c", "zone_grade_d",
+        "layer_htf_supply", "layer_ltf_supply", "layer_htf_demand", "layer_ltf_demand",
+    ):
+        st.session_state[_visibility_key] = True
+    st.session_state.visibility_schema = VISIBILITY_SCHEMA
+
 if "zone_quality" not in st.session_state:
-    st.session_state.zone_quality = "B"
+    st.session_state.zone_quality = "ALL"
 for _key, _default in {
     "layer_context": False,
     "layer_execution": False,
     "layer_conflict": False,
-    "layer_htf_supply": False,
-    "layer_ltf_supply": False,
-    "layer_htf_demand": False,
-    "layer_ltf_demand": False,
+    "layer_htf_supply": True,
+    "layer_ltf_supply": True,
+    "layer_htf_demand": True,
+    "layer_ltf_demand": True,
     "layer_sma20": False,
     "layer_sma50": False,
     "layer_sma200": False,
@@ -2264,6 +2275,7 @@ for _key, _default in {
     "zone_grade_a": True,
     "zone_grade_b": True,
     "zone_grade_c": True,
+    "zone_grade_d": True,
 }.items():
     if _key not in st.session_state:
         st.session_state[_key] = _default
@@ -2619,12 +2631,13 @@ with dashboard_tab:
         # one-click select-all action; selecting/deselecting individual families
         # never forces the others to change.
         st.markdown("<div style='text-align:center;color:#7f8998;font-size:.78rem;font-weight:700;margin:2px 0 6px'>SETUP QUALITY</div>", unsafe_allow_html=True)
-        quality_cols = st.columns(5, gap="small")
+        quality_cols = st.columns(6, gap="small")
         quality_controls = [
             ("ELITE 9.2+", "zone_grade_aplus"),
             ("STRONG 8.2+", "zone_grade_a"),
             ("DEVELOPING 7.0+", "zone_grade_b"),
             ("LEARNING 5.5+", "zone_grade_c"),
+            ("LOW <5.5", "zone_grade_d"),
         ]
         for idx, (label, state_key) in enumerate(quality_controls):
             active = bool(st.session_state.get(state_key, False))
@@ -2633,14 +2646,16 @@ with dashboard_tab:
                 st.rerun()
 
         all_quality_selected = all(bool(st.session_state.get(key, False)) for _, key in quality_controls)
-        if quality_cols[4].button("ALL", width="stretch", type="primary" if all_quality_selected else "secondary", key="quality_toggle_all"):
+        if quality_cols[5].button("ALL", width="stretch", type="primary" if all_quality_selected else "secondary", key="quality_toggle_all"):
             for _, state_key in quality_controls:
                 st.session_state[state_key] = True
             st.rerun()
 
         # Derive the legacy minimum-grade boundary from the lowest independently
         # enabled family. enabled_grades below remains the authoritative switch map.
-        if st.session_state.zone_grade_c:
+        if st.session_state.zone_grade_d:
+            st.session_state.zone_quality = "ALL"
+        elif st.session_state.zone_grade_c:
             st.session_state.zone_quality = "C"
         elif st.session_state.zone_grade_b:
             st.session_state.zone_quality = "B"
@@ -2694,7 +2709,7 @@ with dashboard_tab:
         "A": st.session_state.zone_grade_a,
         "B": st.session_state.zone_grade_b,
         "C": st.session_state.zone_grade_c,
-        "D": False,
+        "D": st.session_state.zone_grade_d,
     }
     candidate_tf = {"1D": "D", "1W": "W"}.get(selected_tf, selected_tf)
     visible_29a = filter_candidates(
@@ -2704,6 +2719,9 @@ with dashboard_tab:
         relevant_timeframes={candidate_tf},
         limit=12,
     )
+
+    grade_counts = {grade: sum(1 for candidate in canonical_candidates if candidate.grade == grade) for grade in ("A+", "A", "B", "C", "D")}
+    st.caption("DETECTED SETUPS - " + " | ".join(f"{grade}: {grade_counts[grade]}" for grade in ("A+", "A", "B", "C", "D")) + f" | Showing {len(visible_29a)} on {selected_tf}")
 
     # Resolve the selected setup BEFORE chart rendering. This makes setup
     # buttons persistent across reruns and drives the chart overlay correctly.
@@ -2758,6 +2776,7 @@ with dashboard_tab:
                     show_grade_a=st.session_state.zone_grade_a,
                     show_grade_b=st.session_state.zone_grade_b,
                     show_grade_c=st.session_state.zone_grade_c,
+                    show_grade_d=st.session_state.zone_grade_d,
                 )
                 rendered_tv = render_tradingview_lightweight_chart(
                     chart_df, selected_tf, market_state,
