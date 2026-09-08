@@ -41,7 +41,7 @@ def _bool(value) -> bool:
 def load_bars(path: Path) -> pd.DataFrame:
     frame = pd.read_parquet(path) if path.suffix.lower() in {".parquet", ".pq"} else pd.read_csv(path)
     columns = {str(c).lower(): c for c in frame.columns}
-    time_col = next((columns[k] for k in ("timestamp", "ts_event", "datetime", "time") if k in columns), None)
+    time_col = next((columns[k] for k in ("timestamp", "ts_event", "datetime", "date", "time", "price") if k in columns), None)
     if time_col is None:
         raise ValueError("Bars require timestamp/ts_event/datetime/time")
     frame.index = pd.to_datetime(frame[time_col], utc=True, errors="coerce")
@@ -49,7 +49,8 @@ def load_bars(path: Path) -> pd.DataFrame:
     missing = {"open", "high", "low", "close"} - set(frame.columns)
     if missing:
         raise ValueError(f"Bars missing columns: {sorted(missing)}")
-    return frame.loc[~frame.index.isna(), ["open", "high", "low", "close"]].astype(float).sort_index()
+    values = frame.loc[~frame.index.isna(), ["open", "high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
+    return values.dropna().sort_index()
 
 
 def resolve_outcome(decision, bars: pd.DataFrame) -> tuple[str, str | None]:
