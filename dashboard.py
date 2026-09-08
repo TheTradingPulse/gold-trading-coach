@@ -73,8 +73,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-AUTO_REFRESH_SECONDS = max(60, int(os.getenv("TP_AUTO_REFRESH_SECONDS", "120")))
-if os.getenv("TP_AUTO_REFRESH_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
+AUTO_REFRESH_SECONDS = max(60, int(os.getenv("TP_AUTO_REFRESH_SECONDS", "300")))
+# Automatic whole-app reruns are opt-in. Multiple browser sessions previously
+# rebuilt eight markets every two minutes and steadily exhausted Railway RAM.
+if os.getenv("TP_AUTO_REFRESH_ENABLED", "0").strip().lower() not in {"0", "false", "no", "off"}:
     st_autorefresh(interval=AUTO_REFRESH_SECONDS * 1000, key="tp_auto_refresh")
 
 
@@ -894,7 +896,7 @@ def get_news_state():
         return "Economic-event status unavailable.", "UNKNOWN"
 
 
-@st.cache_data(ttl=110, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=2, show_spinner=False)
 def get_market_watch():
     return fetch_market_watch(MARKET_WATCH_ORDER)
 
@@ -960,7 +962,7 @@ def resample_30m(df):
     )
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=96, show_spinner=False)
 def get_chart_data(display_tf, limit=260, symbol="GC"):
     db_tf = CHART_TIMEFRAMES[display_tf]
     if display_tf == "30m":
@@ -969,28 +971,28 @@ def get_chart_data(display_tf, limit=260, symbol="GC"):
     return load_market_data(db_tf, limit=limit, symbol=symbol)
 
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=180, max_entries=16, show_spinner=False)
 def get_market_state(symbol="GC"):
     return build_market_state(symbol)
 
 
-@st.cache_data(ttl=110, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=2, show_spinner=False)
 def get_global_elite_snapshot():
     """Global Elite board plus explainable funnel diagnostics from one shared scan."""
     return scan_elite_snapshot(get_enabled_symbols(), limit=6)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=2, show_spinner=False)
 def get_evidence_stats():
     return evidence_stats()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=8, show_spinner=False)
 def get_recent_experiments(limit=5):
     return recent_experiments(limit)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=2, show_spinner=False)
 def get_professor_metrics_cached():
     return get_professor_metrics()
 
