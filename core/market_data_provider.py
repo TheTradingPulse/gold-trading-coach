@@ -22,7 +22,8 @@ PERIODS={"1m":"7d","5m":"60d","15m":"60d","1H":"730d","4H":"730d","D":"10y","W":
 
 # Long enough to collapse duplicate work inside a dashboard refresh, short enough
 # that live 1m state is not silently held for a full Streamlit refresh cycle.
-_RAW_CACHE_TTL_SECONDS = 12.0
+_RAW_CACHE_TTL_SECONDS = 30.0
+_RAW_CACHE_MAX_ENTRIES = 48
 _RAW_CACHE: dict[tuple[str, str, str], tuple[float, pd.DataFrame | None]] = {}
 _RAW_CACHE_LOCK = RLock()
 
@@ -45,19 +46,25 @@ def _provider_frame(data_symbol: str, interval: str, period: str, force_refresh:
 
     if not force_refresh:
         with _RAW_CACHE_LOCK:
+            expired=[cache_key for cache_key,(created,_) in _RAW_CACHE.items() if (now-created) > _RAW_CACHE_TTL_SECONDS]
+            for cache_key in expired:
+                _RAW_CACHE.pop(cache_key, None)
             cached=_RAW_CACHE.get(key)
             if cached is not None and (now-cached[0]) <= _RAW_CACHE_TTL_SECONDS:
                 frame=cached[1]
                 return None if frame is None else frame.copy(deep=False)
 
     try:
-        frame=yf.download(data_symbol,period=period,interval=interval,progress=False,auto_adjust=False)
+        frame=yf.download(data_symbol,period=period,interval=interval,progress=False,auto_adjust=False,threads=False)
     except Exception:
         frame=None
 
     frame=_normalize(frame)
     with _RAW_CACHE_LOCK:
         _RAW_CACHE[key]=(time.monotonic(), frame)
+        while len(_RAW_CACHE) > _RAW_CACHE_MAX_ENTRIES:
+            oldest=min(_RAW_CACHE, key=lambda cache_key: _RAW_CACHE[cache_key][0])
+            _RAW_CACHE.pop(oldest, None)
     return None if frame is None else frame.copy(deep=False)
 
 
@@ -76,7 +83,7 @@ def fetch_market_data(symbol:str,timeframe:str,limit:int=500,as_of=None,force_re
     return df.tail(int(limit)) if len(df) else None
 
 
-def prefetch_market_data(symbol: str, timeframes, max_workers: int = 7) -> None:
+def prefetch_market_data(symbol: str, timeframes, max_workers: int = 3) -> None:
     """Warm the provider cache for a live MarketState build.
 
     Unique provider requests are keyed by (data symbol, interval, period), so 1H
