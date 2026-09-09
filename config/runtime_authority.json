@@ -1,0 +1,39 @@
+{
+  "schema": "TP_RUNTIME_AUTHORITY_1",
+  "production_source_of_truth": "core.market_state_builder",
+  "canonical_contract": "core.canonical_contracts.CanonicalTradeRecord",
+  "production": [
+    "core.market_state_builder",
+    "core.market_state",
+    "core.instruments",
+    "core.account_risk_engine",
+    "core.data_truth_service",
+    "core.canonical_opportunity_lifecycle",
+    "core.visual_trade_quality"
+  ],
+  "research_only": [
+    "core.canonical_professional_zone_detector",
+    "core.canonical_replay_adapter",
+    "core.v4_intrabar_resolver",
+    "core.v4_outcome_engine",
+    "core.v4_point_in_time"
+  ],
+  "quarantine_candidates": [
+    "core.trade_engine",
+    "core.historical_opportunity_research",
+    "core.historical_backtest_engine",
+    "core.historical_replay_engine",
+    "core.v4_multimarket_backtester",
+    "core.v4_contextual_backtester",
+    "core.v4_sniper_engine",
+    "core.v4_grandslam_policy",
+    "core.v4_elite_65_hardening"
+  ],
+  "rules": {
+    "dashboard_may_invent_trade_values": false,
+    "research_may_write_live_scores": false,
+    "zone_touch_is_entry": false,
+    "max_risk_dollars": 300.0,
+    "minimum_profit_room_r": 2.0
+  }
+}
